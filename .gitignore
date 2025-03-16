@@ -1,0 +1,9 @@
+# cache
+.zig-cache
+
+# object files
+*.o
+
+# binaries
+main
+server
