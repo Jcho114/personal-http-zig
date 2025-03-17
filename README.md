@@ -1,10 +1,8 @@
 # Http-Zig
 
-## Notes
-
 This is a side project for my own benefit. What I have at the moment is very likely to change.
 
-## Usagae
+## Usage
 
 ### Server
 
