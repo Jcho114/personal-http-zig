@@ -22,7 +22,7 @@ pub const Request = struct {
 
         var headers = Headers.init(std.heap.page_allocator);
         while (it.next()) |header| {
-            if (header.len == 1 or std.mem.trim(u8, header, " \n").len == 0) break;
+            if (std.mem.trim(u8, header, " \r\n").len == 0) break;
             var headerIt = std.mem.splitSequence(u8, header, ": ");
             const key = headerIt.next() orelse return error.SomeError;
             const value = headerIt.rest();
@@ -69,7 +69,7 @@ pub const Response = struct {
 
         var headers = Headers.init(std.heap.page_allocator);
         while (it.next()) |header| {
-            if (header.len == 1 or std.mem.trim(u8, header, " \n").len == 0) break;
+            if (std.mem.trim(u8, header, " \r\n").len == 0) break;
             var headerIt = std.mem.splitSequence(u8, header, ": ");
             const key = headerIt.next() orelse return error.SomeError;
             const value = headerIt.rest();
