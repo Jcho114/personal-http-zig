@@ -35,6 +35,7 @@ const HttpServer = struct {
         }
         const numBytes = try conn.stream.read(&buffer);
         var request = try Request.parse(buffer[0..numBytes]);
+        std.debug.print("{}\n", .{request});
         defer request.deinit();
     }
 };
@@ -72,6 +73,17 @@ const Request = struct {
 
         const request: Request = .{ .method = method, .target = target, .protocol = protocol, .headers = headers, .body = body };
         return request;
+    }
+
+    pub fn format(self: Request, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const methodString = std.enums.tagName(Method, self.method) orelse std.debug.panic("unable to parse method to string...", .{});
+        try writer.print("{s} {s} {s}\n", .{ methodString, self.target, self.protocol });
+        var it = self.headers.iterator();
+        while (it.next()) |header| {
+            try writer.print("{s}: {s}\n", .{ header.key_ptr.*, header.value_ptr.* });
+        }
+        try writer.writeAll("\n");
+        try writer.writeAll(self.body);
     }
 
     pub fn deinit(self: *Request) void {
