@@ -20,6 +20,7 @@ pub fn handleConnection(conn: std.net.Server.Connection) !void {
     defer request.deinit();
     std.debug.print("Target: {s}\n", .{request.target});
     std.debug.print("Host: {s}\n", .{request.headers.get("Host") orelse "null"});
+    std.debug.print("Body: {s}\n", .{request.body});
 }
 
 pub fn parseRequest(stream: []u8) !Request {
@@ -33,14 +34,17 @@ pub fn parseRequest(stream: []u8) !Request {
 
     var headers = Headers.init(std.heap.page_allocator);
     while (it.next()) |header| {
-        if (header.len == 0) break;
+        if (header.len == 1) break;
         var headerIt = std.mem.splitSequence(u8, header, ": ");
         const key = headerIt.next() orelse return error.SomeError;
         const value = headerIt.rest();
+        std.debug.print("{s}: {s}\n", .{ key, value });
         try headers.put(key, value);
     }
 
-    const request: Request = .{ .method = method, .target = target, .protocol = protocol, .headers = headers };
+    const body = it.rest();
+
+    const request: Request = .{ .method = method, .target = target, .protocol = protocol, .headers = headers, .body = body };
     return request;
 }
 
@@ -53,6 +57,7 @@ const Request = struct {
     target: []const u8,
     protocol: []const u8,
     headers: Headers,
+    body: []const u8,
 
     pub fn deinit(self: *Request) void {
         self.headers.deinit();
