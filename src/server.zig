@@ -28,7 +28,7 @@ const HttpServer = struct {
         }
     }
 
-    pub fn handleConnection(_: *HttpServer, conn: std.net.Server.Connection) !void {
+    fn handleConnection(_: *HttpServer, conn: std.net.Server.Connection) !void {
         defer conn.stream.close();
         var buffer: [1000]u8 = undefined;
         for (0..buffer.len) |i| {
