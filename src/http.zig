@@ -23,7 +23,7 @@ pub const HttpClient = struct {
     }
 
     pub fn deinit(self: *HttpClient) void {
-        std.heap.page_allocator.delete(self);
+        std.heap.page_allocator.destroy(self);
     }
 };
 
