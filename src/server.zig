@@ -1,5 +1,5 @@
 const std = @import("std");
-const http = @import("http.zig");
+const http = @import("http");
 
 pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
     response.* = .{

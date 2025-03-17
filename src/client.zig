@@ -1,5 +1,5 @@
 const std = @import("std");
-const http = @import("http.zig");
+const http = @import("http");
 
 pub fn main() !void {
     const client = try http.HttpClient.init("127.0.0.1", 8080);
