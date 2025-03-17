@@ -8,7 +8,7 @@ This is a side project for my own benefit. What I have at the moment is very lik
 
 ```zig
 const std = @import("std");
-const http = @import("http.zig");
+const http = @import("http");
 
 pub fn testGetHandler(_: *http.Request, response: *http.Response) !void {
     response.* = .{
@@ -30,7 +30,7 @@ pub fn main() !void {
 
 ```zig
 const std = @import("std");
-const http = @import("http.zig");
+const http = @import("http");
 
 pub fn main() !void {
     const client = try http.HttpClient.init("127.0.0.1", 8080);
