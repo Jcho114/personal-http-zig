@@ -1,27 +1,43 @@
 const std = @import("std");
 
 pub fn main() !void {
-    const address = try std.net.Address.parseIp4("127.0.0.1", 8080);
-    var server = try address.listen(.{});
-    defer server.deinit();
-    while (true) {
-        try handleConnection(try server.accept());
-    }
+    var httpServer = try HttpServer.init();
+    defer httpServer.deinit();
+    try httpServer.run();
 }
 
-pub fn handleConnection(conn: std.net.Server.Connection) !void {
-    defer conn.stream.close();
-    var buffer: [1000]u8 = undefined;
-    for (0..buffer.len) |i| {
-        buffer[i] = 0;
+const HttpServer = struct {
+    server: std.net.Server,
+
+    pub fn init() !HttpServer {
+        const address = try std.net.Address.parseIp4("127.0.0.1", 8080);
+        const server = try address.listen(.{});
+        const httpServer: HttpServer = .{ .server = server };
+        return httpServer;
     }
-    const numBytes = try conn.stream.read(&buffer);
-    var request = try Request.parse(buffer[0..numBytes]);
-    defer request.deinit();
-    std.debug.print("Target: {s}\n", .{request.target});
-    std.debug.print("Host: {s}\n", .{request.headers.get("Host") orelse "null"});
-    std.debug.print("Body: {s}\n", .{request.body});
-}
+
+    pub fn deinit(self: *HttpServer) void {
+        self.server.deinit();
+    }
+
+    pub fn run(self: *HttpServer) !void {
+        while (true) {
+            const conn = try self.server.accept();
+            try self.handleConnection(conn);
+        }
+    }
+
+    pub fn handleConnection(_: *HttpServer, conn: std.net.Server.Connection) !void {
+        defer conn.stream.close();
+        var buffer: [1000]u8 = undefined;
+        for (0..buffer.len) |i| {
+            buffer[i] = 0;
+        }
+        const numBytes = try conn.stream.read(&buffer);
+        var request = try Request.parse(buffer[0..numBytes]);
+        defer request.deinit();
+    }
+};
 
 const Method = enum { GET, POST, PUT, DELETE };
 
