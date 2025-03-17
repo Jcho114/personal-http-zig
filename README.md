@@ -1,6 +1,6 @@
 # Http-Zig
 
-This is a side project for my own benefit. What I have at the moment is very likely to change.
+This is a side project for my own benefit. If you really want me to be real, I would say to not use it. What I have at the moment is very likely to change.
 
 ## Usage
 
