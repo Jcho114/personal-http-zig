@@ -63,7 +63,10 @@ pub const HttpServer = struct {
         defer request.deinit();
         std.debug.print("Request\n{}\n\n", .{request});
 
-        const handler = self.routes.get(request.target) orelse defaultHandler;
+        const methodString = std.enums.tagName(Method, request.method) orelse std.debug.panic("unable to parse method to string...", .{});
+        const target = try std.mem.concat(std.heap.page_allocator, u8, &[_][]const u8{ methodString, " ", request.target });
+        defer std.heap.page_allocator.free(target);
+        const handler = self.routes.get(target) orelse self.routes.get(request.target) orelse defaultHandler;
         const response = try Response.init();
         defer response.deinit();
         try handler(request, response);

@@ -6,7 +6,7 @@ pub fn main() !void {
     defer client.deinit();
     const request = try http.Request.init();
     request.* = .{
-        .method = http.Method.GET,
+        .method = http.Method.POST,
         .target = "/",
         .body = "testbody",
     };
