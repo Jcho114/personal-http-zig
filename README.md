@@ -45,3 +45,22 @@ pub fn main() !void {
     std.debug.print("{}\n", .{response});
 }
 ```
+
+## Installation
+
+1. Add http-zig as a dependency in your `build.zig.zon` file
+
+```bash
+zig fetch --save git+https://github.com/Jcho114/http-zig#main
+```
+
+2. Add the module as a dependency in your `build.zig` file
+
+```zig
+const http = b.dependency("http-zig", .{
+    .target = target,
+    .optimize = optimize,
+});
+
+exe.root_module.addImport("http", http.module("http"));
+```
