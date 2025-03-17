@@ -77,6 +77,11 @@ pub const HttpServer = struct {
     }
 
     pub fn route(self: *HttpServer, target: []const u8, handler: Handler) !void {
+        var it = std.mem.splitSequence(u8, target, " ");
+        const first = it.next() orelse "";
+        if (it.rest().len != 0 and std.meta.stringToEnum(Method, first) == null) {
+            return error.SomeError;
+        }
         try self.routes.put(target, handler);
     }
 };
