@@ -299,13 +299,14 @@ pub const HttpServer = struct {
         defer response.deinit();
         try handler(request, response);
 
+        const statusText = try statusCodeToText(response.statusCode);
         std.debug.print("[Thread {d}] \"{s} {s} {s}\" {} {s}\n", .{
             thread_id,
             methodString,
             request.target,
             request.protocol,
             response.statusCode,
-            response.statusText,
+            statusText,
         });
 
         const formatted = try std.fmt.bufPrint(buffer, "{}", .{response});
@@ -383,8 +384,7 @@ fn readHttp(buffer: []u8, stream: std.net.Stream) !usize {
 }
 
 fn defaultHandler(_: *Request, response: *Response) !void {
-    response.statusCode = 404;
-    response.statusText = "Not Found";
+    response.status(404);
 }
 
 pub const Method = enum { GET, POST, PUT, DELETE };
@@ -460,11 +460,79 @@ pub const Request = struct {
     }
 };
 
+fn statusCodeToText(statusCode: u16) ![]const u8 {
+    const statusText = switch (statusCode) {
+        100 => "Continue",
+        101 => "Switching Protocols",
+        102 => "Processing",
+        103 => "Early Hints",
+        200 => "Ok",
+        201 => "Created",
+        202 => "Accepted",
+        203 => "Non-Authoritative Information",
+        204 => "No Content",
+        205 => "Reset Content",
+        206 => "Partial Content",
+        207 => "Multi-Status",
+        208 => "Already Reported",
+        226 => "IM Used",
+        300 => "Multiple Choices",
+        301 => "Moved Permanently",
+        302 => "Found",
+        303 => "See Other",
+        304 => "Not Modified",
+        305 => "Use Proxy",
+        307 => "Temporary Redirect",
+        308 => "Permanent Redirect",
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Content Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Content",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Server Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        else => return error.InvalidStatusCode,
+    };
+    return statusText;
+}
+
 pub const Response = struct {
     allocator: std.mem.Allocator,
-    protocol: []const u8 = "HTTP/1.1",
+    protocol: []const u8,
     statusCode: u16,
-    statusText: []const u8,
     headers: Headers,
     body: []const u8 = "",
 
@@ -476,7 +544,6 @@ pub const Response = struct {
             .allocator = allocator,
             .protocol = "HTTP/1.1",
             .statusCode = 200,
-            .statusText = "Ok",
             .headers = Headers.init(allocator),
             .body = "",
         };
@@ -490,7 +557,6 @@ pub const Response = struct {
         const protocol = firstLineIt.next() orelse return error.ParseError;
         const statusCodeString = firstLineIt.next() orelse return error.ParseError;
         const statusCode = try std.fmt.parseInt(u16, statusCodeString, 10);
-        const statusText = firstLineIt.next() orelse return error.ParseError;
 
         var headers = Headers.init(allocator);
         while (it.next()) |header| {
@@ -512,7 +578,6 @@ pub const Response = struct {
             .allocator = allocator,
             .protocol = protocol,
             .statusCode = statusCode,
-            .statusText = statusText,
             .headers = headers,
             .body = body,
         };
@@ -520,7 +585,8 @@ pub const Response = struct {
     }
 
     pub fn format(self: *Response, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
-        try writer.print("{s} {} {s}\r\n", .{ self.protocol, self.statusCode, self.statusText });
+        const statusText = try statusCodeToText(self.statusCode);
+        try writer.print("{s} {} {s}\r\n", .{ self.protocol, self.statusCode, statusText });
         var it = self.headers.iterator();
         while (it.next()) |header| {
             try writer.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
@@ -530,6 +596,14 @@ pub const Response = struct {
         }
         try writer.writeAll("\r\n");
         try writer.writeAll(self.body);
+    }
+
+    pub fn status(self: *Response, code: u16) void {
+        self.statusCode = code;
+    }
+
+    pub fn send(self: *Response, content: []const u8) void {
+        self.body = content;
     }
 
     pub fn deinit(self: *Response) void {

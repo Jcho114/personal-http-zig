@@ -11,15 +11,13 @@ const std = @import("std");
 const http = @import("http");
 
 pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
-    response.statusCode = 200;
-    response.statusText = "Ok";
-    response.body = request.target;
+    response.status(200);
+    response.send(request.target);
 }
 
 pub fn testGetHandler(_: *http.Request, response: *http.Response) !void {
-    response.statusCode = 200;
-    response.statusText = "Ok";
-    response.body = "test get handler";
+    response.status(200);
+    response.send("test get handler");
 }
 
 pub fn main() !void {
@@ -53,7 +51,6 @@ pub fn main() !void {
 
     const client = try http.HttpClient.init(.{
         .allocator = allocator,
-        .bufferSize = 2000,
     });
     defer client.deinit();
 

@@ -8,7 +8,6 @@ pub fn main() !void {
 
     const client = try http.HttpClient.init(.{
         .allocator = allocator,
-        .bufferSize = 2000,
     });
     defer client.deinit();
 
