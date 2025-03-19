@@ -178,7 +178,7 @@ pub const HttpServer = struct {
     allocator: std.mem.Allocator,
     server: std.net.Server,
     routes: *Routes,
-    threadPool: std.Thread.Pool,
+    numWorkers: u16,
     bufferPool: *BufferPool,
 
     pub fn init(options: HttpServerOptions) !*HttpServer {
@@ -190,13 +190,6 @@ pub const HttpServer = struct {
             std.debug.print("numWorkers is greater than numBuffers\n", .{});
             return error.InvalidOptions;
         }
-
-        var threadPool: std.Thread.Pool = undefined;
-        try threadPool.init(std.Thread.Pool.Options{
-            .allocator = options.allocator,
-            .n_jobs = options.numWorkers,
-        });
-        std.debug.print("thread pool initialized with {} workers\n", .{options.numWorkers});
 
         const bufferPool = try BufferPool.init(.{
             .allocator = options.allocator,
@@ -214,7 +207,7 @@ pub const HttpServer = struct {
             .allocator = options.allocator,
             .server = server,
             .routes = routes,
-            .threadPool = threadPool,
+            .numWorkers = options.numWorkers,
             .bufferPool = bufferPool,
         };
         std.debug.print("server initiailized on port {d}\n", .{options.port});
@@ -224,23 +217,44 @@ pub const HttpServer = struct {
     pub fn deinit(self: *HttpServer) void {
         self.server.deinit();
         self.routes.deinit();
-        self.threadPool.deinit();
         self.bufferPool.deinit();
         self.allocator.destroy(self);
         std.debug.print("server now deinitialized\n", .{});
     }
 
     pub fn run(self: *HttpServer) !void {
-        std.debug.print("server now listening for requests\n", .{});
-        while (true) {
-            const conn = self.server.accept() catch |err| {
-                std.debug.print("failed to accept connection: {}\n", .{err});
-                continue;
-            };
-            const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn });
-            thread.detach();
-            errdefer conn.stream.close();
+        var wg = std.Thread.WaitGroup{};
+        wg.reset();
+
+        const threads = try self.allocator.alloc(std.Thread, self.numWorkers);
+        defer self.allocator.free(threads);
+
+        for (threads, 0..) |*thread, i| {
+            wg.start();
+            thread.* = try std.Thread.spawn(.{}, worker, .{ self, &wg });
+            std.debug.print("worker #{d} spawned successfully\n", .{i + 1});
         }
+
+        std.debug.print("server now listening for requests\n", .{});
+
+        wg.wait();
+
+        for (threads, 0..) |thread, i| {
+            thread.join();
+            std.debug.print("worker #{d} joined successfully\n", .{i + 1});
+        }
+    }
+
+    pub fn worker(self: *HttpServer, wg: *std.Thread.WaitGroup) !void {
+        while (true) {
+            try self.process();
+        }
+        wg.finish();
+    }
+
+    pub fn process(self: *HttpServer) !void {
+        const conn = try self.server.accept();
+        self.handleConnectionWrapper(conn);
     }
 
     pub fn handleConnectionWrapper(self: *HttpServer, conn: std.net.Server.Connection) void {
