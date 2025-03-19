@@ -195,6 +195,7 @@ pub const HttpServer = struct {
             .n_jobs = options.numWorkers,
         });
         std.debug.print("thread pool initialized with {} workers\n", .{options.numWorkers});
+
         const bufferPool = try BufferPool.init(.{
             .allocator = options.allocator,
             .numBuffers = options.numBuffers,
@@ -202,11 +203,11 @@ pub const HttpServer = struct {
         });
         std.debug.print("buffer pool initialized with {} buffers\n", .{options.numBuffers});
 
-        const httpServer = try options.allocator.create(HttpServer);
         const address = try std.net.Address.parseIp4("127.0.0.1", options.port);
         const server = try address.listen(.{});
         const routes = try Routes.init(options.allocator);
 
+        const httpServer = try options.allocator.create(HttpServer);
         httpServer.* = .{
             .allocator = options.allocator,
             .server = server,
@@ -299,7 +300,7 @@ pub const HttpServer = struct {
         var it = std.mem.splitSequence(u8, target, " ");
         const first = it.next() orelse "";
         if (it.rest().len != 0 and std.meta.stringToEnum(Method, first) == null) {
-            std.debug.print("invalid route: '{s}'\n", .{target});
+            std.debug.print("invalid route: \"{s}\"\n", .{target});
             return error.InvalidRoute;
         }
 
@@ -320,7 +321,7 @@ fn readHttp(buffer: []u8, stream: std.net.Stream) !usize {
         if (bytesRead == 0) break;
         totalRead += bytesRead;
         if (totalRead >= buffer.len) {
-            std.debug.print("Buffer too small for response\n", .{});
+            std.debug.print("buffer too small for response\n", .{});
             break;
         }
         if (std.mem.count(u8, buffer[0..totalRead], "\r\n\r\n") == 1) {
@@ -351,7 +352,7 @@ fn readHttp(buffer: []u8, stream: std.net.Stream) !usize {
         }
 
         if (totalRead >= buffer.len) {
-            std.debug.print("Buffer too small for response\n", .{});
+            std.debug.print("buffer too small for response\n", .{});
             break;
         }
 
