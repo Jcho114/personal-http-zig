@@ -236,7 +236,6 @@ pub const HttpServer = struct {
             };
             _ = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn });
             errdefer conn.stream.close();
-            std.debug.print("thread spawned for connection\n", .{});
         }
     }
 
@@ -271,7 +270,6 @@ pub const HttpServer = struct {
 
         var request = try Request.parse(buffer[0..totalRead], self.allocator);
         defer request.deinit();
-        std.debug.print("[Thread {d}] request\n{}\n\n", .{ thread_id, request });
 
         const methodString = std.enums.tagName(Method, request.method) orelse std.debug.panic("unable to parse method to string...", .{});
         const target = try std.mem.concat(self.allocator, u8, &[_][]const u8{ methodString, " ", request.target });
@@ -282,7 +280,15 @@ pub const HttpServer = struct {
         const response = try Response.init(self.allocator);
         defer response.deinit();
         try handler(request, response);
-        std.debug.print("[Thread {d}] response\n{}\n\n", .{ thread_id, response });
+
+        std.debug.print("[Thread {d}] \"{s} {s} {s}\" {} {s}\n", .{
+            thread_id,
+            methodString,
+            request.target,
+            request.protocol,
+            response.statusCode,
+            response.statusText,
+        });
 
         const formatted = try std.fmt.bufPrint(buffer, "{}", .{response});
         try conn.stream.writeAll(formatted);
@@ -298,12 +304,12 @@ pub const HttpServer = struct {
         }
 
         if (self.routes.get(target) != null) {
-            std.debug.print("duplicate route: '{s}'\n", .{target});
+            std.debug.print("duplicate route: \"{s}\"\n", .{target});
             return error.DuplicateRoute;
         }
 
         try self.routes.put(target, handler);
-        std.debug.print("registered route: '{s}'\n", .{target});
+        std.debug.print("registered route: \"{s}\"\n", .{target});
     }
 };
 
