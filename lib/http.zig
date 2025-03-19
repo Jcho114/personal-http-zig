@@ -23,9 +23,11 @@ const BufferPool = struct {
         const mutex = std.Thread.Mutex{};
         for (0..options.numBuffers) |i| {
             const node = try options.allocator.create(Queue.Node);
+            errdefer options.allocator.destroy(node);
             node.data = @intCast(i);
             queue.append(node);
             const buffer = try options.allocator.alloc(u8, options.bufferSize);
+            errdefer options.allocator.free(buffer);
             try buffers.append(buffer);
         }
         bufferPool.* = .{
