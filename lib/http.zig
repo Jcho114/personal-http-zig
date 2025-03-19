@@ -235,7 +235,8 @@ pub const HttpServer = struct {
                 std.debug.print("failed to accept connection: {}\n", .{err});
                 continue;
             };
-            _ = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn });
+            const thread = try std.Thread.spawn(.{}, handleConnectionWrapper, .{ self, conn });
+            thread.detach();
             errdefer conn.stream.close();
         }
     }
