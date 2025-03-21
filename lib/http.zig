@@ -1,5 +1,10 @@
 const std = @import("std");
+
 const buffers = @import("buffers.zig");
+const tries = @import("tries.zig");
+
+const HandlerTrie = tries.HandlerTrie;
+
 const requests = @import("requests.zig");
 const responses = @import("responses.zig");
 
@@ -66,40 +71,40 @@ pub const HttpClient = struct {
     }
 };
 
-const Handler = fn (*Request, *Response) anyerror!void;
+pub const Handler = fn (*Request, *Response) anyerror!void;
 
 const Routes = struct {
     allocator: std.mem.Allocator,
-    map: std.hash_map.StringHashMap(*const Handler),
+    trie: *HandlerTrie,
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) !*Routes {
         const routes = try allocator.create(Routes);
-        const map = std.hash_map.StringHashMap(*const Handler).init(allocator);
+        const trie = try HandlerTrie.init(allocator);
         const mutex = std.Thread.Mutex{};
         routes.* = .{
             .allocator = allocator,
-            .map = map,
+            .trie = trie,
             .mutex = mutex,
         };
         return routes;
     }
 
     pub fn deinit(self: *Routes) void {
-        self.map.deinit();
+        self.trie.deinit();
         self.allocator.destroy(self);
     }
 
     pub fn get(self: *Routes, key: []const u8) ?*const Handler {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.map.get(key);
+        return self.trie.lookup(key);
     }
 
     pub fn put(self: *Routes, key: []const u8, handler: *const Handler) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return try self.map.put(key, handler);
+        return try self.trie.insert(key, handler);
     }
 };
 
