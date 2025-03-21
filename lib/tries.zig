@@ -3,24 +3,30 @@ const http = @import("http.zig");
 
 const Handler = http.Handler;
 
-const HandlerNode = struct {
-    const NodeMap = std.AutoHashMap(u8, *HandlerNode);
+const HandlerEdge = struct {
+    value: u8,
+    next: ?*HandlerNode,
+};
 
-    children: NodeMap,
+const HandlerNode = struct {
+    const HandlerEdgeList = std.ArrayList(HandlerEdge);
+
+    children: HandlerEdgeList,
     handler: ?*const Handler,
 
     pub fn init(allocator: std.mem.Allocator) !*HandlerNode {
         const node = try allocator.create(HandlerNode);
         node.* = .{
-            .children = NodeMap.init(allocator),
+            .children = HandlerEdgeList.init(allocator),
             .handler = null,
         };
         return node;
     }
 
     pub fn deinit(self: *HandlerNode, allocator: std.mem.Allocator) void {
-        var it = self.children.valueIterator();
-        while (it.next()) |node| node.*.deinit(allocator);
+        for (self.children.items) |edge| {
+            if (edge.next) |node| node.*.deinit(allocator);
+        }
         self.children.deinit();
         allocator.destroy(self);
     }
@@ -42,12 +48,17 @@ pub const HandlerTrie = struct {
     pub fn insert(self: *HandlerTrie, key: []const u8, handler: *const Handler) !void {
         var curr = self.root;
         for (key) |c| {
-            const entry = try curr.children.getOrPut(c);
-            if (!entry.found_existing) {
+            var index = for (curr.children.items, 0..) |edge, i| {
+                if (edge.value == c) break i;
+            } else null;
+            if (index == null) {
                 const node = try HandlerNode.init(self.allocator);
-                entry.value_ptr.* = node;
+                try curr.children.append(.{ .value = c, .next = node });
+                index = curr.children.items.len - 1;
             }
-            curr = entry.value_ptr.*;
+            if (index) |i| {
+                if (curr.children.items[i].next) |next| curr = next;
+            }
         }
         curr.handler = handler;
     }
@@ -55,7 +66,12 @@ pub const HandlerTrie = struct {
     pub fn lookup(self: HandlerTrie, key: []const u8) ?*const Handler {
         var curr = self.root;
         for (key) |c| {
-            curr = curr.children.get(c) orelse return null;
+            const index = for (curr.children.items, 0..) |edge, i| {
+                if (edge.value == c) break i;
+            } else null;
+            if (index) |i| {
+                if (curr.children.items[i].next) |next| curr = next;
+            } else return null;
         }
         return curr.handler;
     }
