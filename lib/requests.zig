@@ -5,12 +5,15 @@ const Headers = http.Headers;
 const Method = http.Method;
 
 pub const Request = struct {
+    const Params = std.hash_map.StringHashMap([]const u8);
+
     allocator: std.mem.Allocator,
     method: Method,
     target: []const u8,
     protocol: []const u8,
     headers: Headers,
     body: []const u8,
+    params: Params,
 
     pub fn init(allocator: std.mem.Allocator) !*Request {
         const request = try allocator.create(Request);
@@ -21,6 +24,7 @@ pub const Request = struct {
             .protocol = "HTTP/1.1",
             .headers = Headers.init(allocator),
             .body = "",
+            .params = Params.init(allocator),
         };
         return request;
     }
@@ -29,9 +33,25 @@ pub const Request = struct {
         var it = std.mem.splitSequence(u8, stream, "\r\n");
         const firstLine = it.next() orelse return error.ParseError;
         var firstLineIt = std.mem.splitSequence(u8, firstLine, " ");
+
         const methodString = firstLineIt.next() orelse return error.ParseError;
         const method = std.meta.stringToEnum(Method, methodString) orelse return error.ParseError;
-        const target = firstLineIt.next() orelse return error.ParseError;
+
+        const targetString = firstLineIt.next() orelse return error.ParseError;
+        var targetIt = std.mem.splitSequence(u8, targetString, "?");
+        const target = targetIt.next() orelse return error.ParseError;
+
+        const paramString = targetIt.next() orelse return error.ParseError;
+        if (targetIt.next() != null) return error.ParseError;
+        var paramsIt = std.mem.splitSequence(u8, paramString, "&");
+        var params = Params.init(allocator);
+        while (paramsIt.next()) |param| {
+            var paramIt = std.mem.splitSequence(u8, param, "=");
+            const key = paramIt.next() orelse return error.ParseError;
+            const value = paramIt.rest();
+            try params.put(key, value);
+        }
+
         const protocol = firstLineIt.next() orelse return error.ParseError;
 
         var headers = Headers.init(allocator);
@@ -53,6 +73,7 @@ pub const Request = struct {
             .protocol = protocol,
             .headers = headers,
             .body = body,
+            .params = params,
         };
         return request;
     }
