@@ -187,10 +187,10 @@ pub const HttpServer = struct {
     }
 
     pub fn worker(self: *HttpServer, wg: *std.Thread.WaitGroup) !void {
+        defer wg.finish();
         while (true) {
             try self.process();
         }
-        wg.finish();
     }
 
     pub fn process(self: *HttpServer) !void {
