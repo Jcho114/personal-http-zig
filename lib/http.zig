@@ -1,9 +1,8 @@
 const std = @import("std");
 
 const buffers = @import("buffers.zig");
-const tries = @import("tries.zig");
-
-const HandlerTrie = tries.HandlerTrie;
+const radix = @import("radix.zig");
+const HandlerRadixTree = radix.HandlerRadixTree;
 
 const requests = @import("requests.zig");
 const responses = @import("responses.zig");
@@ -75,12 +74,12 @@ pub const Handler = fn (*Request, *Response) anyerror!void;
 
 const Routes = struct {
     allocator: std.mem.Allocator,
-    trie: *HandlerTrie,
+    trie: *HandlerRadixTree,
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) !*Routes {
         const routes = try allocator.create(Routes);
-        const trie = try HandlerTrie.init(allocator);
+        const trie = try HandlerRadixTree.init(allocator);
         const mutex = std.Thread.Mutex{};
         routes.* = .{
             .allocator = allocator,
@@ -98,7 +97,7 @@ const Routes = struct {
     pub fn get(self: *Routes, key: []const u8) ?*const Handler {
         self.mutex.lock();
         defer self.mutex.unlock();
-        return self.trie.lookup(key);
+        return self.trie.lookup(key) catch null;
     }
 
     pub fn put(self: *Routes, key: []const u8, handler: *const Handler) !void {
