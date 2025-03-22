@@ -112,7 +112,7 @@ pub const HttpServer = struct {
         allocator: std.mem.Allocator,
         port: u16 = 8080,
         numWorkers: u16 = 16,
-        numBuffers: u16 = 16,
+        numBuffers: u16 = 32,
         bufferSize: u16 = 1000,
     };
 
@@ -127,7 +127,7 @@ pub const HttpServer = struct {
             std.debug.print("numWorkers cannot be zero\n", .{});
             return error.InvalidOptions;
         }
-        if (options.numWorkers > options.numBuffers) {
+        if (2 * options.numWorkers > options.numBuffers) {
             std.debug.print("numWorkers is greater than numBuffers\n", .{});
             return error.InvalidOptions;
         }
@@ -216,18 +216,23 @@ pub const HttpServer = struct {
     fn handleConnection(self: *HttpServer, conn: std.net.Server.Connection) !void {
         const thread_id = std.Thread.getCurrentId();
         std.debug.print("[Thread {d}] handling conn\n", .{thread_id});
-        const bufferPointer = try self.bufferPool.get();
+        const readBufferPointer = try self.bufferPool.get();
+        const writeBufferPointer = try self.bufferPool.get();
         defer {
-            self.bufferPool.release(bufferPointer) catch |err| {
-                std.debug.print("[Thread {d}] error releasing buffer: {}\n", .{ thread_id, err });
+            self.bufferPool.release(readBufferPointer) catch |err| {
+                std.debug.print("[Thread {d}] error releasing read buffer: {}\n", .{ thread_id, err });
+            };
+            self.bufferPool.release(readBufferPointer) catch |err| {
+                std.debug.print("[Thread {d}] error releasing write buffer: {}\n", .{ thread_id, err });
             };
         }
 
-        const buffer = bufferPointer.*;
-        const totalRead = try readHttp(buffer, conn.stream);
+        const readBuffer = readBufferPointer.*;
+        const writeBuffer = writeBufferPointer.*;
+        const totalRead = try readHttp(readBuffer, conn.stream);
         if (totalRead == 0) return;
 
-        var request = try Request.parse(buffer[0..totalRead], self.allocator);
+        var request = try Request.parse(readBuffer[0..totalRead], self.allocator);
         defer request.deinit();
 
         const methodString = std.enums.tagName(Method, request.method) orelse std.debug.panic("unable to parse method to string...", .{});
@@ -250,7 +255,7 @@ pub const HttpServer = struct {
             statusText,
         });
 
-        const formatted = try std.fmt.bufPrint(buffer, "{}", .{response});
+        const formatted = try std.fmt.bufPrint(writeBuffer, "{}", .{response});
         try conn.stream.writeAll(formatted);
         std.debug.print("[Thread {d}] finished sending response\n", .{thread_id});
     }
