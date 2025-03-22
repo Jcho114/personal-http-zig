@@ -41,15 +41,16 @@ pub const Request = struct {
         var targetIt = std.mem.splitSequence(u8, targetString, "?");
         const target = targetIt.next() orelse return error.ParseError;
 
-        const paramString = targetIt.next() orelse return error.ParseError;
-        if (targetIt.next() != null) return error.ParseError;
-        var paramsIt = std.mem.splitSequence(u8, paramString, "&");
         var params = Params.init(allocator);
-        while (paramsIt.next()) |param| {
-            var paramIt = std.mem.splitSequence(u8, param, "=");
-            const key = paramIt.next() orelse return error.ParseError;
-            const value = paramIt.rest();
-            try params.put(key, value);
+        const paramString = targetIt.rest();
+        if (paramString.len > 0) {
+            var paramsIt = std.mem.splitSequence(u8, paramString, "&");
+            while (paramsIt.next()) |par| {
+                var paramIt = std.mem.splitSequence(u8, par, "=");
+                const key = paramIt.next() orelse return error.ParseError;
+                const value = paramIt.rest();
+                try params.put(key, value);
+            }
         }
 
         const protocol = firstLineIt.next() orelse return error.ParseError;
@@ -76,6 +77,10 @@ pub const Request = struct {
             .params = params,
         };
         return request;
+    }
+
+    pub fn param(self: *Request, key: []const u8) ?[]const u8 {
+        return self.params.get(key);
     }
 
     pub fn format(self: *Request, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
