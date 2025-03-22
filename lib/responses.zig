@@ -9,7 +9,7 @@ pub fn statusCodeToText(statusCode: u16) ![]const u8 {
         101 => "Switching Protocols",
         102 => "Processing",
         103 => "Early Hints",
-        200 => "Ok",
+        200 => "OK",
         201 => "Created",
         202 => "Accepted",
         203 => "Non-Authoritative Information",
@@ -77,7 +77,7 @@ pub const Response = struct {
     protocol: []const u8,
     statusCode: u16,
     headers: Headers,
-    body: []const u8 = "",
+    body: []const u8,
 
     pub fn init(allocator: std.mem.Allocator) !*Response {
         const response = try allocator.create(Response);
