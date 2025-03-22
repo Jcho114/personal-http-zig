@@ -5,7 +5,7 @@ const Headers = http.Headers;
 const Method = http.Method;
 
 pub const Request = struct {
-    const Params = std.hash_map.StringHashMap([]const u8);
+    const QueryParams = std.hash_map.StringHashMap([]const u8);
 
     allocator: std.mem.Allocator,
     method: Method,
@@ -13,7 +13,7 @@ pub const Request = struct {
     protocol: []const u8,
     headers: Headers,
     body: []const u8,
-    params: Params,
+    queries: QueryParams,
 
     pub fn init(allocator: std.mem.Allocator) !*Request {
         const request = try allocator.create(Request);
@@ -24,7 +24,7 @@ pub const Request = struct {
             .protocol = "HTTP/1.1",
             .headers = Headers.init(allocator),
             .body = "",
-            .params = Params.init(allocator),
+            .queries = QueryParams.init(allocator),
         };
         return request;
     }
@@ -41,15 +41,15 @@ pub const Request = struct {
         var targetIt = std.mem.splitSequence(u8, targetString, "?");
         const target = targetIt.next() orelse return error.ParseError;
 
-        var params = Params.init(allocator);
-        const paramString = targetIt.rest();
-        if (paramString.len > 0) {
-            var paramsIt = std.mem.splitSequence(u8, paramString, "&");
-            while (paramsIt.next()) |par| {
-                var paramIt = std.mem.splitSequence(u8, par, "=");
-                const key = paramIt.next() orelse return error.ParseError;
-                const value = paramIt.rest();
-                try params.put(key, value);
+        var queries = QueryParams.init(allocator);
+        const queryString = targetIt.rest();
+        if (queryString.len > 0) {
+            var queryIt = std.mem.splitSequence(u8, queryString, "&");
+            while (queryIt.next()) |qry| {
+                var qryIt = std.mem.splitSequence(u8, qry, "=");
+                const key = qryIt.next() orelse return error.ParseError;
+                const value = qryIt.rest();
+                try queries.put(key, value);
             }
         }
 
@@ -74,13 +74,13 @@ pub const Request = struct {
             .protocol = protocol,
             .headers = headers,
             .body = body,
-            .params = params,
+            .queries = queries,
         };
         return request;
     }
 
-    pub fn param(self: *Request, key: []const u8) ?[]const u8 {
-        return self.params.get(key);
+    pub fn query(self: *Request, key: []const u8) ?[]const u8 {
+        return self.queries.get(key);
     }
 
     pub fn format(self: *Request, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
