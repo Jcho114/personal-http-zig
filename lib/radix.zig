@@ -9,24 +9,23 @@ const HandlerEdge = struct {
 };
 
 const HandlerNode = struct {
-    const HandlerEdgeList = std.ArrayList(HandlerEdge);
+    const HandlerEdgeMap = std.AutoHashMap(u8, HandlerEdge);
 
-    children: HandlerEdgeList,
+    children: HandlerEdgeMap,
     handler: ?*const Handler,
 
     pub fn init(allocator: std.mem.Allocator) !*HandlerNode {
         const node = try allocator.create(HandlerNode);
         node.* = .{
-            .children = HandlerEdgeList.init(allocator),
+            .children = HandlerEdgeMap.init(allocator),
             .handler = null,
         };
         return node;
     }
 
     pub fn deinit(self: *HandlerNode, allocator: std.mem.Allocator) void {
-        for (self.children.items) |edge| {
-            edge.next.*.deinit(allocator);
-        }
+        var it = self.children.valueIterator();
+        while (it.next()) |edge| edge.next.*.deinit(allocator);
         self.children.deinit();
         allocator.destroy(self);
     }
@@ -62,19 +61,10 @@ pub const HandlerRadixTree = struct {
         var prefix = key;
 
         while (prefix.len > 0) {
-            var found: ?*HandlerEdge = null;
-            var common: usize = 0;
-
-            for (curr.children.items, 0..) |edge, i| {
-                const count = prefixCount(edge.value, prefix);
-                if (count > 0) {
-                    found = &curr.children.items[i];
-                    common = count;
-                    break;
-                }
-            }
+            const found = curr.children.get(prefix[0]);
 
             if (found) |edge| {
+                const common = prefixCount(edge.value, prefix);
                 if (common == edge.value.len and common == prefix.len) {
                     edge.next.handler = handler;
                     return;
@@ -83,22 +73,33 @@ pub const HandlerRadixTree = struct {
                     prefix = prefix[common..];
                 } else {
                     const split = try HandlerNode.init(self.allocator);
-                    try split.children.append(.{ .value = edge.value[common..], .next = edge.next });
+                    try split.children.put(edge.value[common], .{
+                        .value = edge.value[common..],
+                        .next = edge.next,
+                    });
                     if (prefix.len == common) {
                         split.handler = handler;
                     } else {
                         const new = try HandlerNode.init(self.allocator);
                         new.handler = handler;
-                        try split.children.append(.{ .value = prefix[common..], .next = new });
+                        try split.children.put(prefix[0], .{
+                            .value = prefix[common..],
+                            .next = new,
+                        });
                     }
-                    edge.value = prefix[0..common];
-                    edge.next = split;
+                    try curr.children.put(prefix[0], .{
+                        .value = prefix[0..common],
+                        .next = split,
+                    });
                     return;
                 }
             } else {
                 const new = try HandlerNode.init(self.allocator);
                 new.handler = handler;
-                try curr.children.append(.{ .value = prefix, .next = new });
+                try curr.children.put(prefix[0], .{
+                    .value = prefix,
+                    .next = new,
+                });
                 return;
             }
         }
@@ -113,19 +114,11 @@ pub const HandlerRadixTree = struct {
         var prefix = key;
 
         while (prefix.len > 0) {
-            var found: ?*HandlerEdge = null;
-            var common: usize = 0;
-
-            for (curr.children.items, 0..) |edge, i| {
-                const count = prefixCount(edge.value, prefix);
-                if (count > 0) {
-                    found = &curr.children.items[i];
-                    common = count;
-                    break;
-                }
-            }
+            const found = curr.children.get(prefix[0]);
 
             if (found) |edge| {
+                const common = prefixCount(edge.value, prefix);
+
                 if (common == edge.value.len and common == prefix.len) {
                     return edge.next.handler;
                 } else if (common == edge.value.len and common < prefix.len) {
