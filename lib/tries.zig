@@ -5,7 +5,7 @@ const Handler = http.Handler;
 
 const HandlerEdge = struct {
     value: u8,
-    next: ?*HandlerNode,
+    next: *HandlerNode,
 };
 
 const HandlerNode = struct {
@@ -25,7 +25,7 @@ const HandlerNode = struct {
 
     pub fn deinit(self: *HandlerNode, allocator: std.mem.Allocator) void {
         for (self.children.items) |edge| {
-            if (edge.next) |node| node.*.deinit(allocator);
+            edge.next.*.deinit(allocator);
         }
         self.children.deinit();
         allocator.destroy(self);
@@ -57,7 +57,7 @@ pub const HandlerTrie = struct {
                 index = curr.children.items.len - 1;
             }
             if (index) |i| {
-                if (curr.children.items[i].next) |next| curr = next;
+                curr = curr.children.items[i].next;
             }
         }
         curr.handler = handler;
@@ -70,7 +70,7 @@ pub const HandlerTrie = struct {
                 if (edge.value == c) break i;
             } else null;
             if (index) |i| {
-                if (curr.children.items[i].next) |next| curr = next;
+                curr = curr.children.items[i].next;
             } else return null;
         }
         return curr.handler;
@@ -95,11 +95,13 @@ test {
     const trie = try HandlerTrie.init(allocator);
     defer trie.deinit();
 
-    try trie.insert("/", testHandler);
     try trie.insert("/test", testHandler);
+    try trie.insert("/", testHandler);
+    try trie.insert("GET /", testHandler);
 
     try expect(trie.lookup("/") == &testHandler);
     try expect(trie.lookup("/test") == &testHandler);
+    try expect(trie.lookup("GET /") == &testHandler);
     try expect(trie.lookup("/teSt") == null);
     try expect(trie.lookup("/dne") == null);
 }
