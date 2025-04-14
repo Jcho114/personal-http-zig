@@ -22,17 +22,4 @@ pub fn build(b: *std.Build) void {
     server_run_cmd.step.dependOn(b.getInstallStep());
     const server_run_step = b.step("server", "src/server.zig");
     server_run_step.dependOn(&server_run_cmd.step);
-
-    const client_exe = b.addExecutable(.{
-        .name = "client",
-        .root_source_file = b.path("src/client.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    client_exe.root_module.addImport("http", http_module);
-    b.installArtifact(client_exe);
-    const client_run_cmd = b.addRunArtifact(server_exe);
-    client_run_cmd.step.dependOn(b.getInstallStep());
-    const client_run_step = b.step("client", "src/client.zig");
-    client_run_step.dependOn(&client_run_cmd.step);
 }

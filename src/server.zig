@@ -16,10 +16,8 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    var httpServer = try http.HttpServer.init(.{
-        .allocator = allocator,
-        .port = 8080,
-    });
+    const options = try http.HttpServer.HttpServerOptions.default(allocator);
+    var httpServer = try http.HttpServer.init(options);
     defer httpServer.deinit();
 
     try httpServer.route("/", rootHandler);

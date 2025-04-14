@@ -15,76 +15,21 @@ pub const Method = enum { GET, POST, PUT, DELETE };
 
 pub const Headers = std.hash_map.StringHashMap([]const u8);
 
-pub const HttpClient = struct {
-    pub const HttpClientOptions = struct {
-        allocator: std.mem.Allocator,
-        numBuffers: u16 = 1,
-        bufferSize: u16 = 1000,
-    };
-
-    allocator: std.mem.Allocator,
-    bufferPool: *buffers.BufferPool,
-
-    pub fn init(options: HttpClientOptions) !*HttpClient {
-        const httpClient = try options.allocator.create(HttpClient);
-        const bufferPool = try buffers.BufferPool.init(.{
-            .allocator = options.allocator,
-            .numBuffers = options.numBuffers,
-            .bufferSize = options.bufferSize,
-        });
-        std.debug.print("initialized buffer pool with {} buffers\n", .{options.numBuffers});
-        httpClient.* = .{
-            .allocator = options.allocator,
-            .bufferPool = bufferPool,
-        };
-        std.debug.print("initialized http client\n", .{});
-        return httpClient;
-    }
-
-    pub fn send(self: *HttpClient, host: []const u8, port: u16, request: *Request) !*Response {
-        const bufferPointer = try self.bufferPool.get();
-        defer {
-            self.bufferPool.release(bufferPointer) catch |err| {
-                std.debug.print("error releasing buffer: {}\n", .{err});
-            };
-        }
-
-        const buffer = bufferPointer.*;
-        const address = try std.net.Address.parseIp4(host, port);
-        var stream = try std.net.tcpConnectToAddress(address);
-
-        const formatted = try std.fmt.bufPrint(buffer, "{}", .{request});
-        std.debug.print("sending request to {s}\n", .{host});
-        try stream.writeAll(formatted);
-
-        const totalRead = try readHttp(buffer, stream);
-        std.debug.print("received response from {s}\n", .{host});
-
-        const response = try Response.parse(buffer[0..totalRead], self.allocator);
-        return response;
-    }
-
-    pub fn deinit(self: *HttpClient) void {
-        self.bufferPool.deinit();
-        self.allocator.destroy(self);
-    }
-};
-
 pub const Handler = fn (*Request, *Response) anyerror!void;
 
 const Routes = struct {
     allocator: std.mem.Allocator,
     trie: *HandlerRadixTree,
-    mutex: std.Thread.Mutex,
+    rwlock: std.Thread.RwLock,
 
     pub fn init(allocator: std.mem.Allocator) !*Routes {
         const routes = try allocator.create(Routes);
         const trie = try HandlerRadixTree.init(allocator);
-        const mutex = std.Thread.Mutex{};
+        const rwlock = std.Thread.RwLock{};
         routes.* = .{
             .allocator = allocator,
             .trie = trie,
-            .mutex = mutex,
+            .rwlock = rwlock,
         };
         return routes;
     }
@@ -95,14 +40,14 @@ const Routes = struct {
     }
 
     pub fn get(self: *Routes, key: []const u8) ?*const Handler {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
         return self.trie.lookup(key) catch null;
     }
 
     pub fn put(self: *Routes, key: []const u8, handler: *const Handler) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
         return try self.trie.insert(key, handler);
     }
 };
@@ -110,10 +55,21 @@ const Routes = struct {
 pub const HttpServer = struct {
     pub const HttpServerOptions = struct {
         allocator: std.mem.Allocator,
-        port: u16 = 8080,
-        numWorkers: u16 = 16,
-        numBuffers: u16 = 32,
-        bufferSize: u16 = 1000,
+        port: u16,
+        numWorkers: u16,
+        numBuffers: u16,
+        bufferSize: u16,
+
+        pub fn default(allocator: std.mem.Allocator) !HttpServerOptions {
+            const cores = try std.Thread.getCpuCount();
+            return HttpServerOptions{
+                .allocator = allocator,
+                .port = 8080,
+                .numWorkers = @intCast(cores),
+                .numBuffers = @intCast(cores * 2),
+                .bufferSize = 8192,
+            };
+        }
     };
 
     allocator: std.mem.Allocator,
@@ -188,17 +144,31 @@ pub const HttpServer = struct {
 
     pub fn worker(self: *HttpServer, wg: *std.Thread.WaitGroup) !void {
         defer wg.finish();
+        const readBufferPointer = try self.bufferPool.get();
+        const writeBufferPointer = try self.bufferPool.get();
+        const thread_id = std.Thread.getCurrentId();
+        defer {
+            self.bufferPool.release(readBufferPointer) catch |err| {
+                std.debug.print("[Thread {d}] error releasing read buffer: {}\n", .{ thread_id, err });
+            };
+            self.bufferPool.release(writeBufferPointer) catch |err| {
+                std.debug.print("[Thread {d}] error releasing write buffer: {}\n", .{ thread_id, err });
+            };
+        }
         while (true) {
-            try self.process();
+            self.process(readBufferPointer, writeBufferPointer) catch |err| {
+                std.debug.print("[Thread {d}] error processing request: {}\n", .{ thread_id, err });
+                continue;
+            };
         }
     }
 
-    pub fn process(self: *HttpServer) !void {
+    pub fn process(self: *HttpServer, readBufferPointer: *[]u8, writeBufferPointer: *[]u8) !void {
         const conn = try self.server.accept();
-        self.handleConnectionWrapper(conn);
+        self.handleConnectionWrapper(conn, readBufferPointer, writeBufferPointer);
     }
 
-    pub fn handleConnectionWrapper(self: *HttpServer, conn: std.net.Server.Connection) void {
+    pub fn handleConnectionWrapper(self: *HttpServer, conn: std.net.Server.Connection, readBufferPointer: *[]u8, writeBufferPointer: *[]u8) void {
         const thread_id = std.Thread.getCurrentId();
         std.debug.print("[Thread {d}] conn handling started\n", .{thread_id});
         defer {
@@ -206,26 +176,16 @@ pub const HttpServer = struct {
             std.debug.print("[Thread {d}] conn closed\n", .{thread_id});
         }
         const start = std.time.milliTimestamp();
-        self.handleConnection(conn) catch |err| {
+        self.handleConnection(conn, readBufferPointer, writeBufferPointer) catch |err| {
             std.debug.print("[Thread {d}] conn handling error: {}\n", .{ thread_id, err });
         };
         const end = std.time.milliTimestamp();
         std.debug.print("[Thread {d}] processed request in {d} ms\n", .{ thread_id, end - start });
     }
 
-    fn handleConnection(self: *HttpServer, conn: std.net.Server.Connection) !void {
+    fn handleConnection(self: *HttpServer, conn: std.net.Server.Connection, readBufferPointer: *[]u8, writeBufferPointer: *[]u8) !void {
         const thread_id = std.Thread.getCurrentId();
         std.debug.print("[Thread {d}] handling conn\n", .{thread_id});
-        const readBufferPointer = try self.bufferPool.get();
-        const writeBufferPointer = try self.bufferPool.get();
-        defer {
-            self.bufferPool.release(readBufferPointer) catch |err| {
-                std.debug.print("[Thread {d}] error releasing read buffer: {}\n", .{ thread_id, err });
-            };
-            self.bufferPool.release(readBufferPointer) catch |err| {
-                std.debug.print("[Thread {d}] error releasing write buffer: {}\n", .{ thread_id, err });
-            };
-        }
 
         const readBuffer = readBufferPointer.*;
         const writeBuffer = writeBufferPointer.*;
