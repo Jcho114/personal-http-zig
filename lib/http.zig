@@ -41,6 +41,12 @@ const Routes = struct {
         self.allocator.destroy(self);
     }
 
+    pub fn handle(self: *Routes, key: []const u8, request: *Request, response: *Response) !void {
+        self.rwlock.lock();
+        defer self.rwlock.unlock();
+        try self.trie.handle(key, request, response);
+    }
+
     pub fn get(self: *Routes, key: []const u8) ?*const Handler {
         self.rwlock.lock();
         defer self.rwlock.unlock();
@@ -201,11 +207,12 @@ pub const HttpServer = struct {
         const target = try std.mem.concat(self.allocator, u8, &[_][]const u8{ methodString, " ", request.target });
         defer self.allocator.free(target);
 
-        const handler = self.routes.get(target) orelse self.routes.get(request.target) orelse defaultHandler;
-
         const response = try Response.init(self.allocator);
         defer response.deinit();
-        try handler(request, response);
+
+        self.routes.handle(target, request, response) catch
+            self.routes.handle(request.target, request, response) catch
+            defaultHandler(request, response);
 
         const statusText = try statusCodeToText(response.statusCode);
         std.debug.print("[Thread {d}] \"{s} {s} {s}\" {} {s}\n", .{
@@ -291,6 +298,6 @@ fn readHttp(buffer: []u8, stream: std.net.Stream) !usize {
     return totalRead;
 }
 
-fn defaultHandler(_: *Request, response: *Response) !void {
+fn defaultHandler(_: *Request, response: *Response) void {
     response.status(404);
 }

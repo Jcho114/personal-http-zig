@@ -7,6 +7,7 @@ const Cookies = http.Cookies;
 
 pub const Request = struct {
     const QueryParams = std.hash_map.StringHashMap([]const u8);
+    const PathParams = std.hash_map.StringHashMap([]const u8);
 
     allocator: std.mem.Allocator,
     method: Method,
@@ -15,6 +16,7 @@ pub const Request = struct {
     headers: Headers,
     body: []const u8,
     queries: QueryParams,
+    params: PathParams,
     cookies: Cookies,
 
     pub fn init(allocator: std.mem.Allocator) !*Request {
@@ -27,6 +29,7 @@ pub const Request = struct {
             .headers = Headers.init(allocator),
             .body = "",
             .queries = QueryParams.init(allocator),
+            .params = PathParams.init(allocator),
             .cookies = Cookies.init(allocator),
         };
         return request;
@@ -80,6 +83,7 @@ pub const Request = struct {
 
         const body = it.rest();
 
+        const params = PathParams.init(allocator);
         const request = try allocator.create(Request);
         request.* = .{
             .allocator = allocator,
@@ -89,6 +93,7 @@ pub const Request = struct {
             .headers = headers,
             .body = body,
             .queries = queries,
+            .params = params,
             .cookies = cookies,
         };
         return request;
@@ -96,6 +101,10 @@ pub const Request = struct {
 
     pub fn query(self: *Request, key: []const u8) ?[]const u8 {
         return self.queries.get(key);
+    }
+
+    pub fn param(self: *Request, key: []const u8) ?[]const u8 {
+        return self.params.get(key);
     }
 
     pub fn cookie(self: *Request, key: []const u8) ?[]const u8 {
@@ -129,6 +138,7 @@ pub const Request = struct {
     pub fn deinit(self: *Request) void {
         self.headers.deinit();
         self.queries.deinit();
+        self.params.deinit();
         self.cookies.deinit();
         self.allocator.destroy(self);
     }

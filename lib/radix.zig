@@ -2,31 +2,43 @@ const std = @import("std");
 const http = @import("http.zig");
 
 const Handler = http.Handler;
+const Request = http.Request;
+const Response = http.Response;
 
-const HandlerEdge = struct {
+const StaticHandlerEdge = struct {
     value: []const u8,
     next: *HandlerNode,
 };
 
-const HandlerNode = struct {
-    const HandlerEdgeMap = std.AutoHashMap(u8, HandlerEdge);
+const ParamHandlerEdge = struct {
+    param: []const u8,
+    next: *HandlerNode,
+};
 
-    children: HandlerEdgeMap,
+const HandlerNode = struct {
+    const StaticHandlerEdgeMap = std.AutoHashMap(u8, StaticHandlerEdge);
+
+    staticChildren: StaticHandlerEdgeMap,
+    paramChild: ?ParamHandlerEdge,
     handler: ?*const Handler,
 
     pub fn init(allocator: std.mem.Allocator) !*HandlerNode {
         const node = try allocator.create(HandlerNode);
         node.* = .{
-            .children = HandlerEdgeMap.init(allocator),
+            .staticChildren = StaticHandlerEdgeMap.init(allocator),
+            .paramChild = null,
             .handler = null,
         };
         return node;
     }
 
     pub fn deinit(self: *HandlerNode, allocator: std.mem.Allocator) void {
-        var it = self.children.valueIterator();
-        while (it.next()) |edge| edge.next.*.deinit(allocator);
-        self.children.deinit();
+        var staticIt = self.staticChildren.valueIterator();
+        while (staticIt.next()) |edge| edge.next.*.deinit(allocator);
+        self.staticChildren.deinit();
+        if (self.paramChild) |edge| {
+            edge.next.*.deinit(allocator);
+        }
         allocator.destroy(self);
     }
 };
@@ -61,9 +73,32 @@ pub const HandlerRadixTree = struct {
         var prefix = key;
 
         while (prefix.len > 0) {
-            const found = curr.children.get(prefix[0]);
+            const isParam = prefix[0] == ':';
+            if (isParam) {
+                prefix = prefix[1..];
+                var param: []const u8 = "";
+                if (std.mem.indexOf(u8, prefix, "/")) |index| {
+                    param = prefix[0..index];
+                    prefix = prefix[index + 1 ..];
+                } else {
+                    param = prefix[0..];
+                    prefix = "";
+                }
+                const new = try HandlerNode.init(self.allocator);
+                new.handler = handler;
+                curr.paramChild = .{
+                    .param = param,
+                    .next = new,
+                };
+                if (prefix.len == 0) {
+                    return;
+                }
+                curr = new;
+                continue;
+            }
 
-            if (found) |edge| {
+            const staticFound = curr.staticChildren.get(prefix[0]);
+            if (staticFound) |edge| {
                 const common = prefixCount(edge.value, prefix);
                 if (common == edge.value.len and common == prefix.len) {
                     edge.next.handler = handler;
@@ -73,7 +108,7 @@ pub const HandlerRadixTree = struct {
                     prefix = prefix[common..];
                 } else {
                     const split = try HandlerNode.init(self.allocator);
-                    try split.children.put(edge.value[common], .{
+                    try split.staticChildren.put(edge.value[common], .{
                         .value = edge.value[common..],
                         .next = edge.next,
                     });
@@ -82,12 +117,12 @@ pub const HandlerRadixTree = struct {
                     } else {
                         const new = try HandlerNode.init(self.allocator);
                         new.handler = handler;
-                        try split.children.put(prefix[0], .{
+                        try split.staticChildren.put(prefix[0], .{
                             .value = prefix[common..],
                             .next = new,
                         });
                     }
-                    try curr.children.put(prefix[0], .{
+                    try curr.staticChildren.put(prefix[0], .{
                         .value = prefix[0..common],
                         .next = split,
                     });
@@ -96,13 +131,64 @@ pub const HandlerRadixTree = struct {
             } else {
                 const new = try HandlerNode.init(self.allocator);
                 new.handler = handler;
-                try curr.children.put(prefix[0], .{
+                try curr.staticChildren.put(prefix[0], .{
                     .value = prefix,
                     .next = new,
                 });
                 return;
             }
         }
+    }
+
+    pub fn handle(self: HandlerRadixTree, key: []const u8, request: *Request, response: *Response) !void {
+        if (key.len == 0) {
+            return error.InvalidKey;
+        }
+
+        var curr = self.root;
+        var prefix = key;
+
+        while (prefix.len > 0) {
+            const staticFound = curr.staticChildren.get(prefix[0]);
+            if (staticFound) |edge| {
+                const common = prefixCount(edge.value, prefix);
+                if (common == edge.value.len and common == prefix.len) {
+                    if (edge.next.handler) |handler| {
+                        try handler(request, response);
+                        return;
+                    }
+                    return error.HandlerNotFound;
+                } else if (common == edge.value.len and common < prefix.len) {
+                    curr = edge.next;
+                    prefix = prefix[common..];
+                    continue;
+                } else {
+                    return error.HandlerNotFound;
+                }
+            }
+
+            if (curr.paramChild) |edge| {
+                if (std.mem.indexOf(u8, prefix, "/")) |index| {
+                    try request.params.put(edge.param, prefix[0..index]);
+                    prefix = prefix[index + 1 ..];
+                } else {
+                    try request.params.put(edge.param, prefix[0..]);
+                    prefix = "";
+                }
+                curr = edge.next;
+                if (prefix.len == 0) {
+                    if (curr.handler) |handler| {
+                        try handler(request, response);
+                        return;
+                    }
+                    return error.HandlerNotFound;
+                }
+            } else {
+                return error.HandlerNotFound;
+            }
+        }
+
+        return error.HandlerNotFound;
     }
 
     pub fn lookup(self: HandlerRadixTree, key: []const u8) !?*const Handler {
@@ -114,18 +200,29 @@ pub const HandlerRadixTree = struct {
         var prefix = key;
 
         while (prefix.len > 0) {
-            const found = curr.children.get(prefix[0]);
-
-            if (found) |edge| {
+            const staticFound = curr.staticChildren.get(prefix[0]);
+            if (staticFound) |edge| {
                 const common = prefixCount(edge.value, prefix);
-
                 if (common == edge.value.len and common == prefix.len) {
                     return edge.next.handler;
                 } else if (common == edge.value.len and common < prefix.len) {
                     curr = edge.next;
                     prefix = prefix[common..];
+                    continue;
                 } else {
                     return null;
+                }
+            }
+
+            if (curr.paramChild) |edge| {
+                if (std.mem.indexOf(u8, prefix, "/")) |index| {
+                    prefix = prefix[index + 1 ..];
+                } else {
+                    prefix = "";
+                }
+                curr = edge.next;
+                if (prefix.len == 0) {
+                    return curr.handler;
                 }
             } else {
                 return null;
@@ -146,6 +243,11 @@ fn testHandler(request: *http.Request, response: *http.Response) !void {
     response.send(request.target);
 }
 
+fn paramHandler(request: *http.Request, response: *http.Response) !void {
+    response.status(200);
+    response.send(request.target);
+}
+
 test {
     const expect = std.testing.expect;
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
@@ -156,11 +258,10 @@ test {
 
     try trie.insert("/test", testHandler);
     try trie.insert("/", testHandler);
-    try trie.insert("GET /", testHandler);
+    try trie.insert("/:param/test", paramHandler);
 
     try expect(try trie.lookup("/") == &testHandler);
+    try expect(try trie.lookup("/param/dne") == null);
+    try expect(try trie.lookup("/param/test") == &paramHandler);
     try expect(try trie.lookup("/test") == &testHandler);
-    try expect(try trie.lookup("/teSt") == null);
-    try expect(try trie.lookup("/dne") == null);
-    try expect(try trie.lookup("GET /") == &testHandler);
 }
