@@ -82,7 +82,6 @@ pub const Response = struct {
     pub fn init(allocator: std.mem.Allocator) !*Response {
         const response = try allocator.create(Response);
         response.allocator = allocator;
-        response.headers = Headers.init(allocator);
         response.* = .{
             .allocator = allocator,
             .protocol = "HTTP/1.1",
