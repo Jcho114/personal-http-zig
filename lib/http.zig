@@ -15,6 +15,8 @@ pub const Method = enum { GET, POST, PUT, DELETE };
 
 pub const Headers = std.hash_map.StringHashMap([]const u8);
 
+pub const Cookies = std.hash_map.StringHashMap([]const u8);
+
 pub const Handler = fn (*Request, *Response) anyerror!void;
 
 const Routes = struct {

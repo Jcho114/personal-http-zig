@@ -3,6 +3,7 @@ const http = @import("http.zig");
 
 const Headers = http.Headers;
 const Method = http.Method;
+const Cookies = http.Cookies;
 
 pub const Request = struct {
     const QueryParams = std.hash_map.StringHashMap([]const u8);
@@ -14,6 +15,7 @@ pub const Request = struct {
     headers: Headers,
     body: []const u8,
     queries: QueryParams,
+    cookies: Cookies,
 
     pub fn init(allocator: std.mem.Allocator) !*Request {
         const request = try allocator.create(Request);
@@ -25,6 +27,7 @@ pub const Request = struct {
             .headers = Headers.init(allocator),
             .body = "",
             .queries = QueryParams.init(allocator),
+            .cookies = Cookies.init(allocator),
         };
         return request;
     }
@@ -56,12 +59,23 @@ pub const Request = struct {
         const protocol = firstLineIt.next() orelse return error.ParseError;
 
         var headers = Headers.init(allocator);
+        var cookies = Cookies.init(allocator);
         while (it.next()) |header| {
             if (std.mem.trim(u8, header, " \r\n").len == 0) break;
             var headerIt = std.mem.splitSequence(u8, header, ": ");
             const key = headerIt.next() orelse return error.ParseError;
             const value = headerIt.rest();
-            try headers.put(key, value);
+            if (std.mem.eql(u8, key, "Cookie")) {
+                var cookiesIt = std.mem.splitSequence(u8, value, "; ");
+                while (cookiesIt.next()) |cookieStr| {
+                    var cookieIt = std.mem.splitSequence(u8, cookieStr, "=");
+                    const cookieKey = cookieIt.next() orelse return error.ParseError;
+                    const cookieValue = cookieIt.rest();
+                    try cookies.put(cookieKey, cookieValue);
+                }
+            } else {
+                try headers.put(key, value);
+            }
         }
 
         const body = it.rest();
@@ -75,12 +89,17 @@ pub const Request = struct {
             .headers = headers,
             .body = body,
             .queries = queries,
+            .cookies = cookies,
         };
         return request;
     }
 
     pub fn query(self: *Request, key: []const u8) ?[]const u8 {
         return self.queries.get(key);
+    }
+
+    pub fn cookie(self: *Request, key: []const u8) ?[]const u8 {
+        return self.cookies.get(key);
     }
 
     pub fn format(self: *Request, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
@@ -90,11 +109,27 @@ pub const Request = struct {
         while (it.next()) |header| {
             try writer.print("{s}: {s}\r\n", .{ header.key_ptr.*, header.value_ptr.* });
         }
+        try writer.print("Cookie: ", .{});
+        it = self.cookies.iterator();
+        var index: usize = 0;
+        const size = self.cookies.count();
+        while (it.next()) |cookiePair| {
+            if (index == size - 1) {
+                try writer.print("{s}={s}", .{ cookiePair.key_ptr.*, cookiePair.value_ptr.* });
+            } else {
+                try writer.print("{s}={s}; ", .{ cookiePair.key_ptr.*, cookiePair.value_ptr.* });
+            }
+            index += 1;
+        }
+        try writer.print("\r\n", .{});
         try writer.writeAll("\r\n");
         try writer.writeAll(self.body);
     }
 
     pub fn deinit(self: *Request) void {
+        self.headers.deinit();
+        self.queries.deinit();
+        self.cookies.deinit();
         self.allocator.destroy(self);
     }
 };
