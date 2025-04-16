@@ -22,4 +22,21 @@ pub fn build(b: *std.Build) void {
     server_run_cmd.step.dependOn(b.getInstallStep());
     const server_run_step = b.step("server", "src/server.zig");
     server_run_step.dependOn(&server_run_cmd.step);
+
+    const test_step = b.step("test", "Run all tests");
+    const test_files = [_][]const u8{
+        "lib/radix.zig",
+        "lib/json.zig",
+    };
+    for (test_files) |test_file| {
+        const test_artifact = b.addTest(.{
+            .root_source_file = b.path(test_file),
+            .target = target,
+            .optimize = optimize,
+        });
+        test_artifact.root_module.addImport("http", http_module);
+
+        const run_test = b.addRunArtifact(test_artifact);
+        test_step.dependOn(&run_test.step);
+    }
 }
