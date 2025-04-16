@@ -85,7 +85,7 @@ const controlFilter = "\"\\/bfnrtu";
 
 const ParseStringResult = struct { value: []const u8, index: usize };
 
-fn parseString(index: usize, buffer: []const u8) !ParseStringResult {
+fn parseString(index: usize, buffer: []const u8, allocator: std.mem.Allocator) !ParseStringResult {
     if (index >= buffer.len) {
         return error.IndexOutOfRange;
     }
@@ -96,23 +96,36 @@ fn parseString(index: usize, buffer: []const u8) !ParseStringResult {
     }
     i += 1;
 
+    var result = std.ArrayList(u8).init(allocator);
+    defer result.deinit();
+
     while (i < buffer.len and buffer[i] != '"') {
         if (buffer[i] == '\\') {
-            if (!inSlice(u8, controlFilter, buffer[i])) {
+            if (!inSlice(u8, controlFilter, buffer[i + 1])) {
                 return error.ParseStringError;
             }
             if (i + 1 < buffer.len and buffer[i + 1] == 'u') {
-                i += 4;
+                const hex = buffer[i + 2 .. i + 6];
+                const value = try std.fmt.parseInt(u21, hex, 16);
+                var unibuffer: [4]u8 = undefined;
+                const len = try std.unicode.utf8Encode(value, &unibuffer);
+                try result.appendSlice(unibuffer[0..len]);
+                i += 6;
+            } else {
+                try result.append(buffer[i + 1]);
+                i += 2;
             }
+        } else {
+            try result.append(buffer[i]);
+            i += 1;
         }
-        i += 1;
     }
 
     if (buffer[i] != '"') {
         return error.ParseStringError;
     }
 
-    const value = buffer[index + 1 .. i];
+    const value = try result.toOwnedSlice();
     return .{
         .value = value,
         .index = i + 1,
@@ -183,7 +196,7 @@ fn parseValue(index: usize, buffer: []const u8, allocator: std.mem.Allocator) an
     const i = try parseWsp(index, buffer);
     switch (buffer[i]) {
         '"' => {
-            const res = try parseString(i, buffer);
+            const res = try parseString(i, buffer, allocator);
             return .{
                 .value = JsonValue{ .string = res.value },
                 .index = try parseWsp(res.index, buffer),
@@ -199,7 +212,7 @@ fn parseValue(index: usize, buffer: []const u8, allocator: std.mem.Allocator) an
                 };
             } else {
                 return .{
-                    .value = JsonValue{ .int = @as(i32, @intFromFloat(res.value)) },
+                    .value = JsonValue{ .int = @as(i64, @intFromFloat(res.value)) },
                     .index = try parseWsp(res.index, buffer),
                 };
             }
@@ -238,6 +251,44 @@ fn parseValue(index: usize, buffer: []const u8, allocator: std.mem.Allocator) an
     }
 }
 
+fn unparseValue(value: JsonValue, allocator: std.mem.Allocator) anyerror![]const u8 {
+    switch (value) {
+        .object => return try value.object.unparse(),
+        .array => return try value.array.unparse(),
+        .string => return try unparseString(value.string, allocator),
+        .int => return try std.fmt.allocPrint(allocator, "{d}", .{value.int}),
+        .float => if (@floor(value.float) == value.float) {
+            return try std.fmt.allocPrint(allocator, "{d}.0", .{value.float});
+        } else {
+            return try std.fmt.allocPrint(allocator, "{d}", .{value.float});
+        },
+        .bool => return try std.fmt.allocPrint(allocator, "{}", .{value.bool}),
+        .null => return try std.fmt.allocPrint(allocator, "null", .{}),
+    }
+}
+
+fn unparseString(s: []const u8, allocator: std.mem.Allocator) ![]u8 {
+    var out = std.ArrayList(u8).init(allocator);
+    defer out.deinit();
+
+    try out.append('"');
+
+    for (s) |c| {
+        switch (c) {
+            '\\' => try out.appendSlice("\\\\"),
+            '\"' => try out.appendSlice("\\\""),
+            '\n' => try out.appendSlice("\\n"),
+            '\t' => try out.appendSlice("\\t"),
+            '\r' => try out.appendSlice("\\r"),
+            else => try out.append(c),
+        }
+    }
+
+    try out.append('"');
+
+    return try out.toOwnedSlice();
+}
+
 pub const JsonArray = struct {
     array: std.ArrayList(JsonValue),
     allocator: std.mem.Allocator,
@@ -264,6 +315,46 @@ pub const JsonArray = struct {
         return res;
     }
 
+    pub fn unparse(self: *JsonArray) ![]const u8 {
+        return try unparseArray(self.array, self.allocator);
+    }
+
+    pub fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
+        const first = try JsonArray.parse(buffer, allocator);
+        defer first.deinit();
+
+        const str = try first.unparse();
+        defer allocator.free(str);
+
+        const second = try JsonArray.parse(str, allocator);
+        defer second.deinit();
+
+        return first.equals(second);
+    }
+
+    pub fn equals(self: *JsonArray, other: *JsonArray) bool {
+        if (self.array.items.len != other.array.items.len) return false;
+
+        for (0..self.array.items.len) |i| {
+            const left = self.array.items[i];
+            const right = other.array.items[i];
+            if (std.meta.activeTag(left) != std.meta.activeTag(right)) {
+                return false;
+            }
+            switch (left) {
+                .object => if (!left.object.equals(right.object)) return false,
+                .array => if (!left.array.equals(right.array)) return false,
+                .string => if (!std.mem.eql(u8, left.string, right.string)) return false,
+                .int => if (left.int != right.int) return false,
+                .float => if (left.float != right.float) return false,
+                .bool => if (left.bool != right.bool) return false,
+                .null => if (left.null != right.null) return false,
+            }
+        }
+
+        return true;
+    }
+
     pub fn get(self: *JsonArray, comptime tag: JsonValueTag, index: usize) !GetTagType(tag) {
         if (index >= self.array.items.len) return error.IndexOutOfRange;
 
@@ -276,12 +367,9 @@ pub const JsonArray = struct {
     pub fn deinit(self: *JsonArray) void {
         for (self.array.items) |item| {
             switch (item) {
-                .array => {
-                    item.array.deinit();
-                },
-                .object => {
-                    item.object.deinit();
-                },
+                .array => item.array.deinit(),
+                .object => item.object.deinit(),
+                .string => self.allocator.free(item.string),
                 else => continue,
             }
         }
@@ -336,6 +424,26 @@ fn parseArray(index: usize, buffer: []const u8, allocator: std.mem.Allocator) an
     };
 }
 
+fn unparseArray(array: std.ArrayList(JsonValue), allocator: std.mem.Allocator) anyerror![]const u8 {
+    var result = std.ArrayList(u8).init(allocator);
+    defer result.deinit();
+
+    try result.append('[');
+
+    for (array.items, 0..array.items.len) |item, i| {
+        const str = try unparseValue(item, allocator);
+        defer allocator.free(str);
+        try result.appendSlice(str);
+        if (i != array.items.len - 1) {
+            try result.appendSlice(", ");
+        }
+    }
+
+    try result.append(']');
+
+    return result.toOwnedSlice();
+}
+
 pub const JsonObject = struct {
     object: std.hash_map.StringHashMap(JsonValue),
     allocator: std.mem.Allocator,
@@ -362,18 +470,60 @@ pub const JsonObject = struct {
         return res;
     }
 
-    pub fn deinit(self: *JsonObject) void {
-        var iter = self.object.valueIterator();
-        while (iter.next()) |item| {
-            switch (item.*) {
-                .array => {
-                    item.array.deinit();
-                },
-                .object => {
-                    item.object.deinit();
-                },
-                else => continue,
+    pub fn unparse(self: *JsonObject) ![]const u8 {
+        return try unparseObject(self.object, self.allocator);
+    }
+
+    pub fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
+        const first = try JsonObject.parse(buffer, allocator);
+        defer first.deinit();
+
+        const str = try first.unparse();
+        defer allocator.free(str);
+
+        const second = try JsonObject.parse(str, allocator);
+        defer second.deinit();
+
+        return first.equals(second);
+    }
+
+    pub fn equals(self: *JsonObject, other: *JsonObject) bool {
+        if (self.object.count() != other.object.count()) return false;
+
+        var iter = self.object.iterator();
+        while (iter.next()) |leftEntry| {
+            const leftKey = leftEntry.key_ptr.*;
+            const leftValue = leftEntry.value_ptr.*;
+            const rightValue = other.object.get(leftKey) orelse return false;
+            if (std.meta.activeTag(leftValue) != std.meta.activeTag(rightValue)) {
+                return false;
             }
+            switch (leftValue) {
+                .object => if (!leftValue.object.equals(rightValue.object)) return false,
+                .array => if (!leftValue.array.equals(rightValue.array)) return false,
+                .string => if (!std.mem.eql(u8, leftValue.string, rightValue.string)) return false,
+                .int => if (leftValue.int != rightValue.int) return false,
+                .float => if (leftValue.float != rightValue.float) return false,
+                .bool => if (leftValue.bool != rightValue.bool) return false,
+                .null => if (leftValue.null != rightValue.null) return false,
+            }
+        }
+
+        return true;
+    }
+
+    pub fn deinit(self: *JsonObject) void {
+        var iter = self.object.iterator();
+        while (iter.next()) |entry| {
+            const key = entry.key_ptr.*;
+            const value = entry.value_ptr.*;
+            switch (value) {
+                .array => value.array.deinit(),
+                .object => value.object.deinit(),
+                .string => self.allocator.free(value.string),
+                else => {},
+            }
+            self.allocator.free(key);
         }
         self.object.deinit();
         self.allocator.destroy(self);
@@ -408,20 +558,24 @@ fn parseObject(index: usize, buffer: []const u8, allocator: std.mem.Allocator) a
     }
 
     while (true) {
-        const keyRes = try parseString(i, buffer);
+        const keyRes = try parseString(i, buffer, allocator);
         const key = keyRes.value;
         i = try parseWsp(keyRes.index, buffer);
+        const colonIndex = std.mem.indexOf(u8, buffer[i..], ":") orelse return error.ParseObjectError;
+        i = i + colonIndex + 1;
+        i = try parseWsp(i, buffer);
         const valRes = try parseValue(i, buffer, allocator);
         const value = valRes.value;
         i = try parseWsp(valRes.index, buffer);
         try object.put(key, value);
-        if (buffer[i] == ']') {
+        if (buffer[i] == '}') {
             break;
         }
         if (buffer[i] != ',') {
             return error.ParseObjectError;
         }
         i += 1;
+        i = try parseWsp(i, buffer);
     }
     i += 1;
 
@@ -429,6 +583,39 @@ fn parseObject(index: usize, buffer: []const u8, allocator: std.mem.Allocator) a
         .value = object,
         .index = i,
     };
+}
+
+fn unparseObject(object: std.hash_map.StringHashMap(JsonValue), allocator: std.mem.Allocator) anyerror![]const u8 {
+    var result = std.ArrayList(u8).init(allocator);
+    defer result.deinit();
+
+    try result.append('{');
+
+    var iter = object.iterator();
+    const total = object.count();
+    var i: usize = 0;
+    while (iter.next()) |entry| {
+        const key = entry.key_ptr.*;
+        const val = entry.value_ptr.*;
+
+        const val_str = try unparseValue(val, allocator);
+        defer allocator.free(val_str);
+
+        const entry_str = try std.fmt.allocPrint(allocator, "\"{s}\": {s}", .{ key, val_str });
+        defer allocator.free(entry_str);
+
+        try result.appendSlice(entry_str);
+
+        if (i < total - 1) {
+            try result.appendSlice(", ");
+        }
+
+        i += 1;
+    }
+
+    try result.append('}');
+
+    return result.toOwnedSlice();
 }
 
 const expect = std.testing.expect;
@@ -459,25 +646,44 @@ test "number (aka float) parsing" {
 }
 
 test "string parsing" {
-    var res = try parseString(0, "\"a\"");
-    try expect(std.mem.eql(u8, res.value, "a"));
-    try expect(res.index == 3);
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    res = try parseString(0, "\"1\"");
-    try expect(std.mem.eql(u8, res.value, "1"));
-    try expect(res.index == 3);
+    const res1 = try parseString(0, "\"a\"", allocator);
+    defer allocator.free(res1.value);
+    try expect(std.mem.eql(u8, res1.value, "a"));
+    try expect(res1.index == 3);
 
-    res = try parseString(0, "\"😊\"");
-    try expect(std.mem.eql(u8, res.value, "😊"));
-    try expect(res.index == 6);
+    const res2 = try parseString(0, "\"1\"", allocator);
+    defer allocator.free(res2.value);
+    try expect(std.mem.eql(u8, res2.value, "1"));
+    try expect(res2.index == 3);
 
-    res = try parseString(0, "\"\t123\"");
-    try expect(std.mem.eql(u8, res.value, "\t123"));
-    try expect(res.index == 6);
+    const res3 = try parseString(0, "\"😊\"", allocator);
+    defer allocator.free(res3.value);
+    try expect(std.mem.eql(u8, res3.value, "😊"));
+    try expect(res3.index == 6);
 
-    res = try parseString(0, "\"\"");
-    try expect(std.mem.eql(u8, res.value, ""));
-    try expect(res.index == 2);
+    const res4 = try parseString(0, "\"\t123\"", allocator);
+    defer allocator.free(res4.value);
+    try expect(std.mem.eql(u8, res4.value, "\t123"));
+    try expect(res4.index == 6);
+
+    const res5 = try parseString(0, "\"\"", allocator);
+    defer allocator.free(res5.value);
+    try expect(std.mem.eql(u8, res5.value, ""));
+    try expect(res5.index == 2);
+
+    const res6 = try parseString(0, "\"a\\\"b\\\"\"", allocator);
+    defer allocator.free(res6.value);
+    try expect(std.mem.eql(u8, res6.value, "a\"b\""));
+    try expect(res6.index == 8);
+
+    const res7 = try parseString(0, "\"\\u0041\"", allocator);
+    defer allocator.free(res7.value);
+    try expect(std.mem.eql(u8, res7.value, "A"));
+    try expect(res6.index == 8);
 }
 
 test "boolean parsing" {
@@ -495,62 +701,35 @@ test "array parsing" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const res1 = try JsonArray.parse("[1,2.0,3,4]", allocator);
-    defer res1.deinit();
-    var exp1 = try JsonArray.init(allocator);
-    defer exp1.deinit();
-    try exp1.array.appendSlice(&[_]JsonValue{
-        .{ .int = 1 },
-        .{ .float = 2.0 },
-        .{ .int = 3 },
-        .{ .int = 4 },
-    });
-    try expect(res1.array.items.len == exp1.array.items.len);
-    try expect(try res1.get(.int, 0) == try exp1.get(.int, 0));
-    try expect(try res1.get(.float, 1) == try exp1.get(.float, 1));
-    try expect(try res1.get(.int, 2) == try exp1.get(.int, 2));
-    try expect(try res1.get(.int, 3) == try exp1.get(.int, 3));
+    try expect(try JsonArray.roundtrip("[1,2.0,3,4]", allocator));
+    try expect(try JsonArray.roundtrip("[]", allocator));
+    try expect(try JsonArray.roundtrip("[1]", allocator));
+    try expect(try JsonArray.roundtrip("[true, -10.0, -1]", allocator));
+    try expect(try JsonArray.roundtrip("[true, false, null]", allocator));
+    try expect(try JsonArray.roundtrip("[\"test\"]", allocator));
+    try expect(try JsonArray.roundtrip("[1, [true]]", allocator));
+}
 
-    const res2 = try JsonArray.parse("[]", allocator);
-    defer res2.deinit();
-    var exp2 = try JsonArray.init(allocator);
-    defer exp2.deinit();
-    try expect(res2.array.items.len == exp2.array.items.len);
+// TODO - Account for integer and float value overflow (there are some niche errors with that)
+test "object parsing" {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
 
-    const res3 = try JsonArray.parse("[1]", allocator);
-    defer res3.deinit();
-    var exp3 = try JsonArray.init(allocator);
-    defer exp3.deinit();
-    try exp3.array.appendSlice(&[_]JsonValue{.{ .int = 1 }});
-    try expect(res3.array.items.len == exp3.array.items.len);
-    try expect(try res3.get(.int, 0) == try exp3.get(.int, 0));
-
-    const res4 = try JsonArray.parse("[true, false, null]", allocator);
-    defer res4.deinit();
-    var exp4 = try JsonArray.init(allocator);
-    defer exp4.deinit();
-    try exp4.array.appendSlice(&[_]JsonValue{ .{ .bool = true }, .{ .bool = false }, .{ .null = true } });
-    try expect(res4.array.items.len == exp4.array.items.len);
-    try expect(try res4.get(.bool, 0) == try exp4.get(.bool, 0));
-    try expect(try res4.get(.bool, 1) == try exp4.get(.bool, 1));
-    try expect(try res4.get(.null, 2) == try exp4.get(.null, 2));
-
-    const res5 = try JsonArray.parse("[\"test\"]", allocator);
-    defer res5.deinit();
-    var exp5 = try JsonArray.init(allocator);
-    defer exp5.deinit();
-    try exp5.array.appendSlice(&[_]JsonValue{.{ .string = "test" }});
-    try expect(res5.array.items.len == exp5.array.items.len);
-    try expect(std.mem.eql(u8, try res5.get(.string, 0), try exp5.get(.string, 0)));
-
-    const res6 = try JsonArray.parse("[1, [true]]", allocator);
-    defer res6.deinit();
-    var exp6 = try JsonArray.init(allocator);
-    defer exp6.deinit();
-    var exp6Nested = try JsonArray.init(allocator);
-    try exp6Nested.array.append(.{ .bool = true });
-    try exp6.array.appendSlice(&[_]JsonValue{ .{ .int = 1 }, .{ .array = exp6Nested } });
-    try expect(res6.array.items.len == exp6.array.items.len);
-    try expect(try res6.get(.int, 0) == try exp6.get(.int, 0));
-    try expect(try (try res6.get(.array, 1)).get(.bool, 0) == try (try exp6.get(.array, 1)).get(.bool, 0));
+    try expect(try JsonObject.roundtrip("{}", allocator));
+    try expect(try JsonObject.roundtrip("{\"value\": 10}", allocator));
+    try expect(try JsonObject.roundtrip("{\"name\":\"John\",\"age\":30}", allocator));
+    try expect(try JsonObject.roundtrip("{\"person\":{\"name\":\"Alice\",\"age\":28},\"location\":\"NY\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"numbers\":[1,2,3,4],\"letters\":[\"a\",\"b\",\"c\"]}", allocator));
+    try expect(try JsonObject.roundtrip("{\"is_active\":true,\"is_deleted\":false,\"data\":null}", allocator));
+    try expect(try JsonObject.roundtrip("{\"string\":\"hello\",\"number\":123,\"float\":12.34,\"bool\":true,\"null_value\":null}", allocator));
+    try expect(try JsonObject.roundtrip("{\"created_at\":\"2025-04-16T10:00:00Z\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"1\":\"one\",\"2\":\"two\",\"3\":\"three\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"matrix\":[[1,2,3],[4,5,6]]}", allocator));
+    try expect(try JsonObject.roundtrip("{\"empty_array\":[],\"empty_object\":{}}", allocator));
+    try expect(try JsonObject.roundtrip("{\"pi\":3.141592653589793}", allocator));
+    try expect(try JsonObject.roundtrip("{\"UserId\":12345,\"userName\":\"john_doe\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"message\":\"Hello, \\\"World\\\"!\\nNew Line & Tab\\t\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"name\":\"Mary\",\"city\":\"Los Angeles\"}", allocator));
+    try expect(try JsonObject.roundtrip("{\"description\":\"A very long string that could be used in testing how the parser and serializer handle long text content.\"}", allocator));
 }
