@@ -319,7 +319,7 @@ pub const JsonArray = struct {
         return try unparseArray(self.array, self.allocator);
     }
 
-    pub fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
+    fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
         const first = try JsonArray.parse(buffer, allocator);
         defer first.deinit();
 
@@ -474,7 +474,7 @@ pub const JsonObject = struct {
         return try unparseObject(self.object, self.allocator);
     }
 
-    pub fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
+    fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
         const first = try JsonObject.parse(buffer, allocator);
         defer first.deinit();
 
