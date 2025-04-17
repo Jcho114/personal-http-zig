@@ -364,6 +364,34 @@ pub const JsonArray = struct {
         return @field(val, @tagName(tag));
     }
 
+    pub fn add(self: *JsonArray, comptime tag: JsonValueTag, value: GetTagType(tag)) !void {
+        try self.array.append(@unionInit(JsonValue, @tagName(tag), value));
+    }
+
+    pub fn addObject(self: *JsonArray) !*JsonObject {
+        const object = try JsonObject.init(self.allocator);
+        try self.array.append(.{ .object = object });
+        return object;
+    }
+
+    pub fn addObjectWith(self: *JsonArray, buildFn: fn (*JsonObject) anyerror!void) !void {
+        const object = try JsonObject.init(self.allocator);
+        try buildFn(object);
+        try self.array.append(.{ .object = object });
+    }
+
+    pub fn addArray(self: *JsonArray) !*JsonArray {
+        const array = try JsonArray.init(self.allocator);
+        try self.array.append(.{ .array = array });
+        return array;
+    }
+
+    pub fn addArrayWith(self: *JsonArray, buildFn: fn (*JsonArray) anyerror!void) !void {
+        const array = try JsonArray.init(self.allocator);
+        try buildFn(array);
+        try self.array.append(.{ .array = array });
+    }
+
     pub fn deinit(self: *JsonArray) void {
         for (self.array.items) |item| {
             switch (item) {
@@ -472,6 +500,47 @@ pub const JsonObject = struct {
 
     pub fn unparse(self: *JsonObject) ![]const u8 {
         return try unparseObject(self.object, self.allocator);
+    }
+
+    pub fn get(self: *JsonObject, comptime tag: JsonValueTag, key: []const u8) !GetTagType(tag) {
+        const val = self.object.get(key) orelse return error.KeyDoesNotExist;
+
+        if (val != tag) return error.UnexpectedType;
+
+        return @field(val, @tagName(tag));
+    }
+
+    pub fn put(self: *JsonObject, comptime tag: JsonValueTag, key: []const u8, value: GetTagType(tag)) !void {
+        const dupedKey = try self.allocator.dupe(u8, key);
+        try self.object.put(dupedKey, @unionInit(JsonValue, @tagName(tag), value));
+    }
+
+    pub fn putObject(self: *JsonObject, key: []const u8) !*JsonObject {
+        const dupedKey = try self.allocator.dupe(u8, key);
+        const object = try JsonObject.init(self.allocator);
+        try self.object.put(dupedKey, .{ .object = object });
+        return object;
+    }
+
+    pub fn putObjectWith(self: *JsonObject, key: []const u8, buildFn: fn (*JsonObject) anyerror!void) !void {
+        const dupedKey = try self.allocator.dupe(u8, key);
+        const object = try JsonObject.init(self.allocator);
+        try buildFn(object);
+        try self.object.put(dupedKey, .{ .object = object });
+    }
+
+    pub fn putArray(self: *JsonObject, key: []const u8) !*JsonArray {
+        const dupedKey = try self.allocator.dupe(u8, key);
+        const array = try JsonArray.init(self.allocator);
+        try self.object.put(dupedKey, .{ .array = array });
+        return array;
+    }
+
+    pub fn putArrayWith(self: *JsonArray, key: []const u8, buildFn: fn (*JsonArray) anyerror!void) !void {
+        const dupedKey = try self.allocator.dupe(u8, key);
+        const array = try JsonArray.init(self.allocator);
+        try buildFn(array);
+        try self.object.put(dupedKey, .{ .array = array });
     }
 
     fn roundtrip(buffer: []const u8, allocator: std.mem.Allocator) !bool {
@@ -626,7 +695,7 @@ test "white space parsing" {
     try expect(try parseWsp(0, "\t\r\n test") == 4);
 }
 
-// TODO = support exponentials
+// TODO - support exponentials
 test "number (aka float) parsing" {
     var res = try parseNumber(0, "10 ");
     try expect(res.value == 10.0);
@@ -732,4 +801,59 @@ test "object parsing" {
     try expect(try JsonObject.roundtrip("{\"message\":\"Hello, \\\"World\\\"!\\nNew Line & Tab\\t\"}", allocator));
     try expect(try JsonObject.roundtrip("{\"name\":\"Mary\",\"city\":\"Los Angeles\"}", allocator));
     try expect(try JsonObject.roundtrip("{\"description\":\"A very long string that could be used in testing how the parser and serializer handle long text content.\"}", allocator));
+}
+
+test "array building" {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var array = try JsonArray.init(allocator);
+    defer array.deinit();
+    try array.add(.int, 10);
+    try array.add(.bool, true);
+    try expect(try array.get(.int, 0) == 10);
+    try expect(try array.get(.bool, 1) == true);
+}
+
+test "object building" {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var object = try JsonObject.init(allocator);
+    defer object.deinit();
+    try object.put(.int, "key1", 10);
+    try object.put(.bool, "key2", false);
+    try expect(try object.get(.int, "key1") == 10);
+    try expect(try object.get(.bool, "key2") == false);
+}
+
+// TODO - Figure out ways to combat the verbosity
+test "nested array and object building" {
+    var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var outerArray = try JsonArray.init(allocator);
+    defer outerArray.deinit();
+    try (try outerArray.addObject()).put(.int, "key", 10);
+    try expect(try (try outerArray.get(.object, 0)).get(.int, "key") == 10);
+    try outerArray.addArrayWith(struct {
+        fn build(array: *JsonArray) !void {
+            try array.add(.float, -5.2);
+        }
+    }.build);
+    try expect(try (try outerArray.get(.array, 1)).get(.float, 0) == -5.2);
+
+    var outerObject = try JsonObject.init(allocator);
+    defer outerObject.deinit();
+    try (try outerObject.putArray("array")).add(.int, 10);
+    try expect(try (try outerObject.get(.array, "array")).get(.int, 0) == 10);
+    try outerObject.putObjectWith("object", struct {
+        fn build(object: *JsonObject) !void {
+            try object.put(.float, "float", -5.2);
+        }
+    }.build);
+    try expect(try (try outerObject.get(.object, "object")).get(.float, "float") == -5.2);
 }
