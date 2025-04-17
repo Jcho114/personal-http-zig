@@ -1,5 +1,9 @@
 const std = @import("std");
 const http = @import("http.zig");
+const json = @import("json.zig");
+
+const JsonObject = json.JsonObject;
+const JsonArray = json.JsonArray;
 
 const Headers = http.Headers;
 
@@ -146,6 +150,14 @@ pub const Response = struct {
 
     pub fn send(self: *Response, content: []const u8) void {
         self.body = content;
+    }
+
+    pub fn jsonArray(self: *Response, array: *JsonArray) !void {
+        self.body = try array.unparse();
+    }
+
+    pub fn jsonObject(self: *Response, object: *JsonObject) !void {
+        self.body = try object.unparse();
     }
 
     pub fn deinit(self: *Response) void {

@@ -7,6 +7,7 @@ This is a side project for my own learning. If you really want me to be real, I 
 ```zig
 const std = @import("std");
 const http = @import("http");
+const JsonObject = http.JsonObject;
 
 pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
     response.status(200);
@@ -14,13 +15,37 @@ pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
 }
 
 pub fn testGetHandler(_: *http.Request, response: *http.Response) !void {
+    const object = try JsonObject.init(response.allocator);
+    defer object.deinit();
+    try object.put(.string, "message", "test get handler");
     response.status(200);
-    response.send("test get handler");
+    try response.jsonObject(object);
 }
 
 pub fn testParamHandler(request: *http.Request, response: *http.Response) !void {
     response.status(200);
     response.send(request.param("param") orelse "unknown");
+}
+
+pub fn testJsonEchoHandler(request: *http.Request, response: *http.Response) !void {
+    const resobj = try JsonObject.init(response.allocator);
+    defer resobj.deinit();
+
+    const reqobj = JsonObject.parse(request.body, request.allocator) catch {
+        try resobj.put(.string, "message", "no json provided");
+        response.status(400);
+        return try response.jsonObject(resobj);
+    };
+
+    const reqmes = reqobj.get(.string, "message") catch {
+        try resobj.put(.string, "message", "request json has no field message");
+        response.status(400);
+        return try response.jsonObject(resobj);
+    };
+
+    try resobj.put(.string, "message", reqmes);
+    response.status(200);
+    try response.jsonObject(resobj);
 }
 
 pub fn main() !void {
@@ -34,9 +59,9 @@ pub fn main() !void {
 
     try httpServer.route("/", rootHandler);
     try httpServer.route("GET /test", testGetHandler);
+    try httpServer.route("POST /test/json", testJsonEchoHandler);
     try httpServer.route("/:param/test", testParamHandler);
 
     try httpServer.run();
 }
 ```
-
