@@ -4,6 +4,10 @@ const buffers = @import("buffers.zig");
 const radix = @import("radix.zig");
 const HandlerRadixTree = radix.HandlerRadixTree;
 
+const json = @import("json.zig");
+pub const JsonArray = json.JsonArray;
+pub const JsonObject = json.JsonObject;
+
 const requests = @import("requests.zig");
 const responses = @import("responses.zig");
 

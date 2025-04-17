@@ -1,5 +1,6 @@
 const std = @import("std");
 const http = @import("http");
+const JsonObject = http.JsonObject;
 
 pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
     response.status(200);
@@ -7,8 +8,11 @@ pub fn rootHandler(request: *http.Request, response: *http.Response) !void {
 }
 
 pub fn testGetHandler(_: *http.Request, response: *http.Response) !void {
+    const object = try JsonObject.init(response.allocator);
+    defer object.deinit();
+    try object.put(.string, "message", "test get handler");
     response.status(200);
-    response.send("test get handler");
+    try response.jsonObject(object);
 }
 
 pub fn testParamHandler(request: *http.Request, response: *http.Response) !void {

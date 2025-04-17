@@ -365,7 +365,8 @@ pub const JsonArray = struct {
     }
 
     pub fn add(self: *JsonArray, comptime tag: JsonValueTag, value: GetTagType(tag)) !void {
-        try self.array.append(@unionInit(JsonValue, @tagName(tag), value));
+        const addValue = if (tag == .string) try self.allocator.dupe(u8, value) else value;
+        try self.array.append(@unionInit(JsonValue, @tagName(tag), addValue));
     }
 
     pub fn addObject(self: *JsonArray) !*JsonObject {
@@ -511,22 +512,23 @@ pub const JsonObject = struct {
     }
 
     pub fn put(self: *JsonObject, comptime tag: JsonValueTag, key: []const u8, value: GetTagType(tag)) !void {
-        const dupedKey = try self.allocator.dupe(u8, key);
-        try self.object.put(dupedKey, @unionInit(JsonValue, @tagName(tag), value));
+        const putKey = try self.allocator.dupe(u8, key);
+        const putValue = if (tag == .string) try self.allocator.dupe(u8, value) else value;
+        try self.object.put(putKey, @unionInit(JsonValue, @tagName(tag), putValue));
     }
 
     pub fn putObject(self: *JsonObject, key: []const u8) !*JsonObject {
-        const dupedKey = try self.allocator.dupe(u8, key);
+        const putKey = try self.allocator.dupe(u8, key);
         const object = try JsonObject.init(self.allocator);
-        try self.object.put(dupedKey, .{ .object = object });
+        try self.object.put(putKey, .{ .object = object });
         return object;
     }
 
     pub fn putObjectWith(self: *JsonObject, key: []const u8, buildFn: fn (*JsonObject) anyerror!void) !void {
-        const dupedKey = try self.allocator.dupe(u8, key);
+        const putKey = try self.allocator.dupe(u8, key);
         const object = try JsonObject.init(self.allocator);
         try buildFn(object);
-        try self.object.put(dupedKey, .{ .object = object });
+        try self.object.put(putKey, .{ .object = object });
     }
 
     pub fn putArray(self: *JsonObject, key: []const u8) !*JsonArray {
@@ -812,8 +814,10 @@ test "array building" {
     defer array.deinit();
     try array.add(.int, 10);
     try array.add(.bool, true);
+    try array.add(.string, "test");
     try expect(try array.get(.int, 0) == 10);
     try expect(try array.get(.bool, 1) == true);
+    try expect(std.mem.eql(u8, try array.get(.string, 2), "test"));
 }
 
 test "object building" {
@@ -825,8 +829,10 @@ test "object building" {
     defer object.deinit();
     try object.put(.int, "key1", 10);
     try object.put(.bool, "key2", false);
+    try object.put(.string, "key3", "test");
     try expect(try object.get(.int, "key1") == 10);
     try expect(try object.get(.bool, "key2") == false);
+    try expect(std.mem.eql(u8, try object.get(.string, "key3"), "test"));
 }
 
 // TODO - Figure out ways to combat the verbosity
