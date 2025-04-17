@@ -20,6 +20,27 @@ pub fn testParamHandler(request: *http.Request, response: *http.Response) !void 
     response.send(request.param("param") orelse "unknown");
 }
 
+pub fn testJsonEchoHandler(request: *http.Request, response: *http.Response) !void {
+    const resobj = try JsonObject.init(response.allocator);
+    defer resobj.deinit();
+
+    const reqobj = JsonObject.parse(request.body, request.allocator) catch {
+        try resobj.put(.string, "message", "no json provided");
+        response.status(400);
+        return try response.jsonObject(resobj);
+    };
+
+    const reqmes = reqobj.get(.string, "message") catch {
+        try resobj.put(.string, "message", "request json has no field message");
+        response.status(400);
+        return try response.jsonObject(resobj);
+    };
+
+    try resobj.put(.string, "message", reqmes);
+    response.status(200);
+    try response.jsonObject(resobj);
+}
+
 pub fn main() !void {
     var gpa: std.heap.GeneralPurposeAllocator(.{}) = .{};
     defer _ = gpa.deinit();
@@ -31,6 +52,7 @@ pub fn main() !void {
 
     try httpServer.route("/", rootHandler);
     try httpServer.route("GET /test", testGetHandler);
+    try httpServer.route("GET /test/json", testJsonEchoHandler);
     try httpServer.route("/:param/test", testParamHandler);
 
     try httpServer.run();
