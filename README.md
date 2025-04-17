@@ -59,7 +59,7 @@ pub fn main() !void {
 
     try httpServer.route("/", rootHandler);
     try httpServer.route("GET /test", testGetHandler);
-    try httpServer.route("GET /test/json", testJsonEchoHandler);
+    try httpServer.route("POST /test/json", testJsonEchoHandler);
     try httpServer.route("/:param/test", testParamHandler);
 
     try httpServer.run();
